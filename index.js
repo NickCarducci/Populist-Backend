@@ -18,13 +18,31 @@ const helmet = require("helmet");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const appleSignin = require("apple-signin-auth");
+const path = require("path");
 require("dotenv").config();
 
 // Initialize Express app
 const app = express();
 
+// Check critical environment variables on startup
+if (!process.env.APPLE_CLIENT_ID) {
+  console.warn(
+    "⚠️  WARNING: APPLE_CLIENT_ID is missing or empty. 'Sign in with Apple' will fail."
+  );
+}
+
 // Security middleware
-app.use(helmet());
+// Allow inline styles for the splash page
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+        "style-src": ["'self'", "'unsafe-inline'"]
+      }
+    }
+  })
+);
 app.use(cors({ origin: true })); // In production, restrict to IDWise IPs
 app.use(express.json());
 app.use(express.urlencoded({ extended: true })); // Required for Apple Sign In form-post
@@ -36,6 +54,9 @@ const limiter = rateLimit({
   message: "Too many webhook requests from this IP, please try again later."
 });
 app.use("/webhook", limiter);
+
+// Serve static files (CSS, Images, HTML) from 'public' folder
+app.use(express.static(path.join(__dirname, "public")));
 
 // Initialize Firebase Admin SDK
 if (!admin.apps.length) {
@@ -404,18 +425,10 @@ app.get("/health", (req, res) => {
 });
 
 /**
- * Root endpoint - documentation
+ * Root endpoint - Serve Splash Page
  */
 app.get("/", (req, res) => {
-  res.status(200).json({
-    service: "IDWise Webhook Handler for Populist",
-    version: "1.0.0",
-    endpoints: {
-      webhook: "POST /webhook",
-      health: "GET /health"
-    },
-    documentation: "See README.md for configuration details"
-  });
+  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 // For Cloud Functions deployment

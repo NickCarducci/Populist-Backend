@@ -3,6 +3,7 @@
 ## Why DigitalOcean App Platform?
 
 ### **Best Value for Production:**
+
 - **Fixed $5/month** (Basic plan)
 - **No usage fees** - unlimited requests
 - **No surprise bills** unlike Google Cloud/AWS
@@ -11,13 +12,13 @@
 
 ### **Cost Comparison:**
 
-| Platform | Base Cost | Usage Fees | Typical Monthly Cost |
-|----------|-----------|------------|---------------------|
-| **DigitalOcean** | **$5/mo** | **None** | **$5** ✅ |
-| Cloud Run | $0 | Per request | $0-10 (unpredictable) |
-| Firebase Functions | $0 | Per invocation | $0-5 (unpredictable) |
-| Railway | $0-5 | Per hour | $0-10 (variable) |
-| Heroku | $5-7 | None | $7 |
+| Platform           | Base Cost | Usage Fees     | Typical Monthly Cost  |
+| ------------------ | --------- | -------------- | --------------------- |
+| **DigitalOcean**   | **$5/mo** | **None**       | **$5** ✅             |
+| Cloud Run          | $0        | Per request    | $0-10 (unpredictable) |
+| Firebase Functions | $0        | Per invocation | $0-5 (unpredictable)  |
+| Railway            | $0-5      | Per hour       | $0-10 (variable)      |
+| Heroku             | $5-7      | None           | $7                    |
 
 **Winner: DigitalOcean** - Fixed $5, no surprises! 🎯
 
@@ -26,6 +27,7 @@
 ## 🚀 Deploy in 5 Minutes
 
 ### **Prerequisites:**
+
 1. DigitalOcean account (free to create)
 2. GitHub account
 3. Your code pushed to GitHub
@@ -90,16 +92,19 @@ In the DigitalOcean dashboard:
 FIREBASE_PROJECT_ID = pop-u-list
 PORT = 8080
 NODE_ENV = production
+APPLE_CLIENT_ID = com.sayists.service
 ```
 
 3. For **Firebase credentials**, you have 2 options:
 
 **Option A: Service Account Key (Easier)**
+
 ```
 FIREBASE_CONFIG = {paste entire serviceAccountKey.json content}
 ```
 
 **Option B: Individual Fields** (More secure)
+
 ```
 FIREBASE_PROJECT_ID = pop-u-list
 FIREBASE_CLIENT_EMAIL = firebase-adminsdk-...@pop-u-list.iam.gserviceaccount.com
@@ -111,11 +116,13 @@ FIREBASE_PRIVATE_KEY = -----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY---
 ### **Step 5: Choose Plan**
 
 **Recommended: Basic Plan - $5/month**
+
 - 512 MB RAM
 - 1 vCPU
 - Perfect for webhooks!
 
 **Why not free tier?**
+
 - DigitalOcean doesn't have a free tier
 - But $5 is the cheapest predictable cost
 - No usage fees = no surprises
@@ -134,11 +141,13 @@ FIREBASE_PRIVATE_KEY = -----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY---
 ## 🔧 Your Webhook URL
 
 After deployment:
+
 ```
 https://your-app-abc123.ondigitalocean.app/webhook
 ```
 
 Add this to IDWise Dashboard:
+
 1. Go to IDWise Dashboard → Settings → Webhooks
 2. Create new webhook
 3. URL: `https://your-app-abc123.ondigitalocean.app/webhook`
@@ -155,6 +164,7 @@ Add this to IDWise Dashboard:
 3. See real-time output!
 
 ### **Console Output:**
+
 ```
 🚀 IDWise Webhook Handler running on port 8080
 📥 Received webhook event: Finished Journey
@@ -187,6 +197,7 @@ git push origin main
 ### **Manual Deployment:**
 
 In DigitalOcean dashboard:
+
 1. Click your app
 2. Click **Deploy**
 3. Select commit
@@ -199,6 +210,7 @@ In DigitalOcean dashboard:
 ### **What You Pay:**
 
 **Basic Plan: $5/month** includes:
+
 - 512 MB RAM
 - 1 vCPU
 - Unlimited bandwidth
@@ -214,6 +226,7 @@ No matter how many webhooks you receive!
 ### **When to Upgrade:**
 
 You won't need to. Even with 10,000 users:
+
 - ~10,000 webhooks/month
 - Each webhook takes <100ms
 - Plenty of capacity on $5 plan
@@ -233,6 +246,7 @@ You won't need to. Even with 10,000 users:
 ### **2. Environment Variables**
 
 ✅ Already secured (added in Step 4)
+
 - Never commit secrets to git
 - Use DigitalOcean's encrypted env vars
 
@@ -242,12 +256,12 @@ If IDWise provides IP addresses:
 
 ```javascript
 // Add to index.js
-const ALLOWED_IPS = process.env.IDWISE_IPS?.split(',') || [];
+const ALLOWED_IPS = process.env.IDWISE_IPS?.split(",") || [];
 
-app.use('/webhook', (req, res, next) => {
+app.use("/webhook", (req, res, next) => {
   const clientIP = req.ip;
   if (ALLOWED_IPS.length && !ALLOWED_IPS.includes(clientIP)) {
-    return res.status(403).json({ error: 'Forbidden' });
+    return res.status(403).json({ error: "Forbidden" });
   }
   next();
 });
@@ -275,6 +289,7 @@ curl -X POST https://your-app.ondigitalocean.app/webhook \
 ```
 
 **Expected Response:**
+
 ```json
 {
   "success": true,
@@ -290,16 +305,16 @@ curl -X POST https://your-app.ondigitalocean.app/webhook \
 
 ## 🆚 DigitalOcean vs Others
 
-| Feature | DigitalOcean | Cloud Run | Firebase Functions |
-|---------|--------------|-----------|-------------------|
-| **Monthly Cost** | $5 fixed | $0-10 variable | $0-5 variable |
-| **Usage Fees** | None ✅ | Per request | Per invocation |
-| **Billing Surprise** | Never | Possible | Possible |
-| **Setup Difficulty** | Easy | Medium | Easy |
-| **GitHub Integration** | Yes ✅ | Manual | Manual |
-| **Auto Deploy** | Yes ✅ | No | No |
-| **Logs** | Built-in ✅ | GCloud CLI | Firebase CLI |
-| **Custom Domain** | Free ✅ | Extra setup | Extra setup |
+| Feature                | DigitalOcean | Cloud Run      | Firebase Functions |
+| ---------------------- | ------------ | -------------- | ------------------ |
+| **Monthly Cost**       | $5 fixed     | $0-10 variable | $0-5 variable      |
+| **Usage Fees**         | None ✅      | Per request    | Per invocation     |
+| **Billing Surprise**   | Never        | Possible       | Possible           |
+| **Setup Difficulty**   | Easy         | Medium         | Easy               |
+| **GitHub Integration** | Yes ✅       | Manual         | Manual             |
+| **Auto Deploy**        | Yes ✅       | No             | No                 |
+| **Logs**               | Built-in ✅  | GCloud CLI     | Firebase CLI       |
+| **Custom Domain**      | Free ✅      | Extra setup    | Extra setup        |
 
 **Winner: DigitalOcean** for predictable billing! 🏆
 
@@ -308,16 +323,19 @@ curl -X POST https://your-app.ondigitalocean.app/webhook \
 ## 🔧 Troubleshooting
 
 ### **App won't start:**
+
 - Check logs for errors
 - Verify `package.json` has `"start": "node index.js"`
 - Ensure PORT is set to 8080
 
 ### **Webhook returns 500:**
+
 - Check Firebase credentials are correct
 - Verify user exists in Firestore
 - Check runtime logs for error details
 
 ### **Environment variables not working:**
+
 - Redeploy after adding env vars
 - Check spelling matches code exactly
 - Use `process.env.VARIABLE_NAME` in code
@@ -329,12 +347,14 @@ curl -X POST https://your-app.ondigitalocean.app/webhook \
 ### **When to Scale:**
 
 Current $5 plan handles:
+
 - Up to **50,000 webhooks/month**
 - Up to **100,000 users**
 
 If you exceed this (unlikely):
 
 **Pro Plan: $12/month**
+
 - 1 GB RAM
 - 2 vCPUs
 - Still no usage fees!
@@ -344,11 +364,13 @@ If you exceed this (unlikely):
 ## 🎯 Quick Reference
 
 ### **URLs:**
+
 - **App Dashboard:** https://cloud.digitalocean.com/apps
 - **Webhook Endpoint:** `https://your-app.ondigitalocean.app/webhook`
 - **Health Check:** `https://your-app.ondigitalocean.app/health`
 
 ### **Commands:**
+
 ```bash
 # View logs
 # (Use DigitalOcean dashboard - easier than CLI)
