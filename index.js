@@ -39,9 +39,15 @@ app.use("/webhook", limiter);
 
 // Initialize Firebase Admin SDK
 if (!admin.apps.length) {
-  // For local development, use service account key
-  // For Cloud Functions, this auto-configures
-  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+  // Option 1: Load from JSON string in environment variable (Best for DigitalOcean/Production)
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+  }
+  // Option 2: Load from file path (Best for Local Dev)
+  else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
     const serviceAccount = require(process.env.GOOGLE_APPLICATION_CREDENTIALS);
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
