@@ -57,7 +57,7 @@ const limiter = rateLimit({
 app.use("/webhook", limiter);
 
 // Serve static files (CSS, Images, HTML) from React app build directory
-app.use(express.static(path.join(__dirname, "client/dist")));
+app.use(express.static(path.join(__dirname, "dist")));
 
 // Initialize Firebase Admin SDK
 if (!admin.apps.length) {
@@ -438,7 +438,7 @@ app.get("*", (req, res) => {
   ) {
     return res.status(404).json({ error: "Not Found" });
   }
-  res.sendFile(path.join(__dirname, "client/dist", "index.html"));
+  res.sendFile(path.join(__dirname, "dist", "index.html"));
 });
 
 // For Cloud Functions deployment
