@@ -92,7 +92,7 @@ In the DigitalOcean dashboard:
 FIREBASE_PROJECT_ID = pop-u-list
 PORT = 8080
 NODE_ENV = production
-APPLE_CLIENT_ID = com.sayists.service
+APPLE_CLIENT_ID = com.sayists.Populist.signin
 ```
 
 3. For **Firebase credentials**, you have 2 options:

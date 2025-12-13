@@ -7,7 +7,7 @@
  * Environment Variables Required:
  * - IDWISE_CLIENT_KEY: Your IDWise client key (for verification)
  * - FIREBASE_PROJECT_ID: Your Firebase project ID (optional if using service account)
- * - APPLE_CLIENT_ID: Your Apple Service ID (e.g. com.sayists.service)
+ * - APPLE_CLIENT_ID: Your Apple Service ID (e.g. com.sayists.Populist.signin)
  * - GOOGLE_APPLICATION_CREDENTIALS: Path to Firebase service account JSON (for local dev)
  *
  */
@@ -38,7 +38,8 @@ app.use(
     contentSecurityPolicy: {
       directives: {
         ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-        "style-src": ["'self'", "'unsafe-inline'"]
+        "style-src": ["'self'", "'unsafe-inline'"],
+        "script-src": ["'self'", "'unsafe-inline'"]
       }
     }
   })
@@ -55,8 +56,8 @@ const limiter = rateLimit({
 });
 app.use("/webhook", limiter);
 
-// Serve static files (CSS, Images, HTML) from 'public' folder
-app.use(express.static(path.join(__dirname, "public")));
+// Serve static files (CSS, Images, HTML) from React app build directory
+app.use(express.static(path.join(__dirname, "client/dist")));
 
 // Initialize Firebase Admin SDK
 if (!admin.apps.length) {
@@ -318,7 +319,7 @@ app.post("/webhook", async (req, res) => {
  * Apple Sign In Callback Handler
  *
  * POST /apple
- * Return URL configured in Apple Developer Console: https://sayists.com/apple
+ * Return URL configured in Apple Developer Console: https://youinpolitics.com/apple
  *
  * Receives the form POST from Apple, verifies identity, creates Firebase user,
  * and redirects with a custom token.
@@ -425,10 +426,19 @@ app.get("/health", (req, res) => {
 });
 
 /**
- * Root endpoint - Serve Splash Page
+ * Root endpoint - Serve React App (SPA)
+ * Handles all non-API routes
  */
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+app.get("*", (req, res) => {
+  // Don't intercept API routes if they fell through
+  if (
+    req.path.startsWith("/webhook") ||
+    req.path.startsWith("/apple") ||
+    req.path.startsWith("/health")
+  ) {
+    return res.status(404).json({ error: "Not Found" });
+  }
+  res.sendFile(path.join(__dirname, "client/dist", "index.html"));
 });
 
 // For Cloud Functions deployment
