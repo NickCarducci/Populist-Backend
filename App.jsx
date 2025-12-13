@@ -1,19 +1,56 @@
 import React, { useState, useEffect } from "react";
+import { initializeApp } from "firebase/app";
+import { getAuth, signInWithCustomToken, signOut } from "firebase/auth";
+// Import the functions you need from the SDKs you need
+// https://firebase.google.com/docs/web/setup#available-libraries
+
+// Your web app's Firebase configuration
+const firebaseConfig = {
+  apiKey: "AIzaSyBIWePSPPG4vlaPUkYruZSdOR95NglRT2o",
+  authDomain: "pop-u-list.firebaseapp.com",
+  projectId: "pop-u-list",
+  storageBucket: "pop-u-list.firebasestorage.app",
+  messagingSenderId: "373429951237",
+  appId: "1:373429951237:web:85726684aaa034ec9eb56c"
+};
+
+// Initialize Firebase Client SDK
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
 
 function App() {
   const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
+    // Listen for auth state changes (persists session across refreshes)
+    const unsubscribe = auth.onAuthStateChanged((currentUser) => {
+      setUser(currentUser);
+      setLoading(false);
+    });
+
     // Check for token and uid in URL params (returned from backend redirect)
     const query = new URLSearchParams(window.location.search);
     const token = query.get("token");
-    const uid = query.get("uid");
 
-    if (token && uid) {
-      setUser({ token, uid });
-      // Clean the URL for a cleaner UI state
-      window.history.replaceState({}, document.title, window.location.pathname);
+    if (token) {
+      // Exchange the custom token for a Firebase session
+      signInWithCustomToken(auth, token)
+        .then(() => {
+          // Clean the URL for a cleaner UI state
+          window.history.replaceState(
+            {},
+            document.title,
+            window.location.pathname
+          );
+        })
+        .catch((err) => {
+          console.error("Sign in failed", err);
+          setError(err.message);
+        });
     }
+    return () => unsubscribe();
   }, []);
 
   const handleSignIn = () => {
@@ -32,6 +69,10 @@ function App() {
       `state=${state}`;
 
     window.location.href = url;
+  };
+
+  const handleSignOut = () => {
+    signOut(auth);
   };
 
   return (
@@ -74,7 +115,11 @@ function App() {
           Populist App Backend
         </p>
 
-        {user ? (
+        {loading ? (
+          <div style={{ color: "#666" }}>Loading...</div>
+        ) : error ? (
+          <div style={{ color: "red" }}>Error: {error}</div>
+        ) : user ? (
           <div style={{ animation: "fadein 1s ease-in" }}>
             <div
               style={{
@@ -97,8 +142,23 @@ function App() {
                   margin: 0
                 }}
               >
-                {user.uid}
+                {user.email || user.uid}
               </p>
+              <button
+                onClick={handleSignOut}
+                style={{
+                  marginTop: "1rem",
+                  background: "transparent",
+                  border: "1px solid rgba(255,255,255,0.2)",
+                  color: "#fff",
+                  padding: "8px 16px",
+                  borderRadius: "20px",
+                  cursor: "pointer",
+                  fontSize: "0.8rem"
+                }}
+              >
+                Sign Out
+              </button>
             </div>
           </div>
         ) : (

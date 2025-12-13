@@ -24,6 +24,21 @@ require("dotenv").config();
 // Initialize Express app
 const app = express();
 
+// Trust the proxy (DigitalOcean Load Balancer) to get correct IP and protocol
+// This is required for rate limiting to work correctly and to detect HTTPS
+app.set("trust proxy", 1);
+
+// Force HTTPS in production
+app.use((req, res, next) => {
+  if (
+    process.env.NODE_ENV === "production" &&
+    req.get("X-Forwarded-Proto") !== "https"
+  ) {
+    return res.redirect(`https://${req.get("Host")}${req.url}`);
+  }
+  next();
+});
+
 // Check critical environment variables on startup
 if (!process.env.APPLE_CLIENT_ID) {
   console.warn(
@@ -75,6 +90,14 @@ if (!admin.apps.length) {
         "base64"
       ).toString("utf-8");
       serviceAccount = JSON.parse(decoded);
+    }
+
+    // Fix private_key formatting if needed (handles common copy-paste issues)
+    if (serviceAccount.private_key) {
+      serviceAccount.private_key = serviceAccount.private_key.replace(
+        /\\n/g,
+        "\n"
+      );
     }
 
     admin.initializeApp({
@@ -410,7 +433,7 @@ app.post("/apple", async (req, res) => {
     res.redirect(`/?token=${customToken}&uid=${uid}`);
   } catch (error) {
     console.error("❌ Apple Sign In processing error:", error);
-    res.status(500).send("Authentication failed");
+    res.status(500).send(`Authentication failed: ${error.message}`);
   }
 });
 
