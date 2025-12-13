@@ -41,7 +41,20 @@ app.use("/webhook", limiter);
 if (!admin.apps.length) {
   // Option 1: Load from JSON string in environment variable (Best for DigitalOcean/Production)
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    let serviceAccount;
+    try {
+      // Try parsing as direct JSON
+      serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    } catch (error) {
+      // Fallback: Try decoding from Base64 (Fixes copy-paste formatting issues)
+      console.log("JSON parse failed, attempting Base64 decode...");
+      const decoded = Buffer.from(
+        process.env.FIREBASE_SERVICE_ACCOUNT,
+        "base64"
+      ).toString("utf-8");
+      serviceAccount = JSON.parse(decoded);
+    }
+
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });

@@ -9,6 +9,7 @@
     "test": "jest"
   },
   "keywords": [
+    "apple",
     "idwise",
     "webhook",
     "firebase",
@@ -16,7 +17,7 @@
     "identity-verification"
   ],
   "author": "Populist Team",
-  "license": "MIT",
+  "license": "NONE",
   "dependencies": {
     "express": "^4.18.2",
     "firebase-admin": "^12.0.0",
