@@ -189,8 +189,17 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
 
     // Decode CBOR assertion
     const decodedAssertion = cbor.decodeFirstSync(assertion);
-    const authenticatorData = decodedAssertion.authenticatorData;
-    const signature = decodedAssertion.signature;
+
+    // Handle both Map (if configured) and Object returns from cbor
+    let authenticatorData, signature;
+    if (decodedAssertion instanceof Map) {
+      authenticatorData = decodedAssertion.get("authenticatorData");
+      signature = decodedAssertion.get("signature");
+    } else {
+      authenticatorData = decodedAssertion.authenticatorData;
+      signature = decodedAssertion.signature;
+    }
+
     const clientDataHash = Buffer.from(challenge, "base64");
 
     // 0. Verify App ID (RPID Hash)
@@ -217,6 +226,12 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
       x: coseKey.get(-2).toString("base64url"),
       y: coseKey.get(-3).toString("base64url")
     };
+
+    console.log(`🔍 Debug: Verifying App Attest Signature`);
+    console.log(`   AuthData Len: ${authenticatorData.length}`);
+    console.log(`   ClientHash Len: ${clientDataHash.length}`);
+    console.log(`   Signature Len: ${signature.length}`);
+    console.log(`   JWK X: ${jwk.x.substring(0, 10)}...`);
 
     // Construct the data that was signed: authenticatorData + clientDataHash
     const signedData = Buffer.concat([authenticatorData, clientDataHash]);
