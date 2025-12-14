@@ -785,6 +785,7 @@ app.post("/api/attest/register", async (req, res) => {
       .doc(safeKeyId)
       .set(
         {
+          keyId,
           publicKey: authData.toString("base64"),
           counter: 0,
           registeredAt: admin.firestore.FieldValue.serverTimestamp(),
