@@ -140,6 +140,28 @@ function getSafeFirestoreId(id) {
   return id.replace(/\//g, "_").replace(/\+/g, "-");
 }
 
+/**
+ * Verifies that the App ID (RPID Hash) in the authenticator data matches our TeamID.BundleID
+ * This ensures the request is coming from OUR app signed by OUR team.
+ */
+function verifyAppIdHash(authData) {
+  const teamId = process.env.APPLE_TEAM_ID;
+  const bundleId = process.env.APPLE_BUNDLE_ID || "com.sayists.Populist";
+
+  if (!teamId || !bundleId) {
+    console.warn(
+      "⚠️ APPLE_TEAM_ID or APPLE_BUNDLE_ID missing. Skipping strict App ID check."
+    );
+    return true;
+  }
+
+  const appId = `${teamId}.${bundleId}`;
+  const expectedHash = crypto.createHash("sha256").update(appId).digest();
+  const actualHash = authData.subarray(0, 32); // First 32 bytes is the RPID Hash
+
+  return actualHash.equals(expectedHash);
+}
+
 // ============================================================================
 // APP ATTEST & SAFETYNET VALIDATION
 // ============================================================================
@@ -170,6 +192,12 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     const authenticatorData = decodedAssertion.authenticatorData;
     const signature = decodedAssertion.signature;
     const clientDataHash = Buffer.from(challenge, "base64");
+
+    // 0. Verify App ID (RPID Hash)
+    if (!verifyAppIdHash(authenticatorData)) {
+      console.error("❌ App Attest App ID mismatch (RPID Hash)");
+      return false;
+    }
 
     // 1. Verify Signature
     // We need to extract the public key from the stored authData (registered previously)
@@ -745,6 +773,12 @@ app.post("/api/attest/register", async (req, res) => {
     // In production, you should fully validate the attestation with Apple's servers
     const { authData } = decodedAttestation;
 
+    // Verify App ID (RPID Hash) matches our TeamID.BundleID
+    if (!verifyAppIdHash(authData)) {
+      console.error("❌ App Attest Registration App ID mismatch");
+      return res.status(403).json({ error: "Invalid App ID or Team ID" });
+    }
+
     // Store the public key and initial counter
     await db
       .collection("devices")
@@ -754,7 +788,7 @@ app.post("/api/attest/register", async (req, res) => {
           publicKey: authData.toString("base64"),
           counter: 0,
           registeredAt: admin.firestore.FieldValue.serverTimestamp(),
-          bundleId: process.env.APPLE_BUNDLE_ID
+          bundleId: process.env.APPLE_BUNDLE_ID || "com.sayists.Populist"
         },
         { merge: true }
       );
