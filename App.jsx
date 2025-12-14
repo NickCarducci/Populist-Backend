@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithCustomToken, signOut } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
 import AdminDashboard from "./AdminDashboard";
 import BillFeed from "./BillFeed";
 import UserAccount from "./UserAccount";
@@ -18,8 +19,9 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase Client SDK
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
+export const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+export const db = getFirestore(app);
 
 function App() {
   const [user, setUser] = useState(null);
@@ -246,7 +248,7 @@ function App() {
         ) : error ? (
           <div style={{ color: "red" }}>Error: {error}</div>
         ) : view === "feed" ? (
-          <BillFeed />
+          <BillFeed user={user} />
         ) : view === "account" && user ? (
           <UserAccount user={user} onSignOut={handleSignOut} />
         ) : view === "admin" && user ? (
