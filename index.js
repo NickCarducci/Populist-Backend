@@ -134,6 +134,12 @@ const db = admin.firestore();
 // In production, consider using Redis for better performance
 const processedEvents = new Set();
 
+// Helper to sanitize Base64 IDs for Firestore paths (replace / with _)
+function getSafeFirestoreId(id) {
+  if (!id) return id;
+  return id.replace(/\//g, "_").replace(/\+/g, "-");
+}
+
 // ============================================================================
 // APP ATTEST & SAFETYNET VALIDATION
 // ============================================================================
@@ -147,8 +153,9 @@ const processedEvents = new Set();
  */
 async function validateAppAttest(assertionBase64, keyId, challenge) {
   try {
+    const safeKeyId = getSafeFirestoreId(keyId);
     // Get stored public key for this device
-    const keyDoc = await db.collection("app_attest_keys").doc(keyId).get();
+    const keyDoc = await db.collection("app_attest_keys").doc(safeKeyId).get();
     if (!keyDoc.exists) {
       console.error("❌ App Attest key not found:", keyId);
       return false;
@@ -209,7 +216,7 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     }
 
     // Update counter in database
-    await db.collection("app_attest_keys").doc(keyId).update({
+    await db.collection("app_attest_keys").doc(safeKeyId).update({
       counter,
       lastUsed: admin.firestore.FieldValue.serverTimestamp()
     });
@@ -584,10 +591,12 @@ app.post("/api/secure-key", apiKeyLimiter, async (req, res) => {
 
     console.log(`📱 API key request from ${platform} device: ${deviceId}`);
 
+    const safeDeviceId = getSafeFirestoreId(deviceId);
+
     // Check if device is revoked BEFORE validation
     const deviceDoc = await db
       .collection("device_api_keys")
-      .doc(deviceId)
+      .doc(safeDeviceId)
       .get();
     if (deviceDoc.exists && deviceDoc.data().revoked) {
       console.log(`🚫 Revoked device attempted access: ${deviceId}`);
@@ -649,7 +658,7 @@ app.post("/api/secure-key", apiKeyLimiter, async (req, res) => {
       // Update last seen timestamp
       await db
         .collection("device_api_keys")
-        .doc(deviceId)
+        .doc(safeDeviceId)
         .update({
           lastSeen: admin.firestore.FieldValue.serverTimestamp(),
           requestCount: admin.firestore.FieldValue.increment(1)
@@ -672,7 +681,7 @@ app.post("/api/secure-key", apiKeyLimiter, async (req, res) => {
     const encrypted = encryptAPIKeyPerDevice(targetApiKey, deviceId, service);
 
     // Store encrypted key in Firestore (perpetual, but revocable)
-    await db.collection("device_api_keys").doc(deviceId).set({
+    await db.collection("device_api_keys").doc(safeDeviceId).set({
       deviceId,
       service,
       platform,
@@ -726,6 +735,8 @@ app.post("/api/attest/register", async (req, res) => {
       });
     }
 
+    const safeKeyId = getSafeFirestoreId(keyId);
+
     // Decode attestation object (CBOR encoded)
     const attestationBuffer = Buffer.from(attestation, "base64");
     const decodedAttestation = cbor.decodeFirstSync(attestationBuffer);
@@ -737,7 +748,7 @@ app.post("/api/attest/register", async (req, res) => {
     // Store the public key and initial counter
     await db
       .collection("app_attest_keys")
-      .doc(keyId)
+      .doc(safeKeyId)
       .set({
         publicKey: authData.toString("base64"),
         counter: 0,
@@ -813,7 +824,8 @@ app.post("/apple", async (req, res) => {
 
     // Create or update user in Firebase
     // We use a prefixed UID to avoid collisions with other auth providers
-    const uid = `apple:${appleUserId}`;
+    // We sanitize the ID to ensure it's a valid Firestore document path (no slashes)
+    const uid = `apple:${getSafeFirestoreId(appleUserId)}`;
 
     try {
       // Check if user exists in Firebase Auth
@@ -906,10 +918,12 @@ app.post("/admin/revoke-device", async (req, res) => {
       });
     }
 
+    const safeDeviceId = getSafeFirestoreId(deviceId);
+
     // Check if device exists
     const deviceDoc = await db
       .collection("device_api_keys")
-      .doc(deviceId)
+      .doc(safeDeviceId)
       .get();
 
     if (!deviceDoc.exists) {
@@ -922,7 +936,7 @@ app.post("/admin/revoke-device", async (req, res) => {
     // Mark device as revoked
     await db
       .collection("device_api_keys")
-      .doc(deviceId)
+      .doc(safeDeviceId)
       .update({
         revoked: true,
         revokedAt: admin.firestore.FieldValue.serverTimestamp(),

@@ -96,7 +96,13 @@ function App() {
         padding: user ? "2rem 0" : 0
       }}
     >
-      <div style={{ textAlign: "center", animation: "fadein 2s ease-in", width: "100%" }}>
+      <div
+        style={{
+          textAlign: "center",
+          animation: "fadein 2s ease-in",
+          width: "100%"
+        }}
+      >
         {/* Header */}
         <div style={{ marginBottom: "2rem" }}>
           <h1
@@ -118,23 +124,34 @@ function App() {
               textTransform: "uppercase"
             }}
           >
-            {view === "feed" ? "Populist Legislative Feed" : view === "account" ? "Your Account" : "Admin Dashboard"}
+            {view === "feed"
+              ? "Populist Legislative Feed"
+              : view === "account"
+              ? "Your Account"
+              : "Admin Dashboard"}
           </p>
         </div>
 
         {/* Navigation Tabs */}
-        <div style={{
-          display: "flex",
-          justifyContent: "center",
-          gap: "1rem",
-          marginBottom: "3rem",
-          flexWrap: "wrap"
-        }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            gap: "1rem",
+            marginBottom: "3rem",
+            flexWrap: "wrap"
+          }}
+        >
           <button
             onClick={() => setView("feed")}
             style={{
-              background: view === "feed" ? "rgba(255,255,255,0.1)" : "transparent",
-              border: `1px solid ${view === "feed" ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.1)"}`,
+              background:
+                view === "feed" ? "rgba(255,255,255,0.1)" : "transparent",
+              border: `1px solid ${
+                view === "feed"
+                  ? "rgba(255,255,255,0.3)"
+                  : "rgba(255,255,255,0.1)"
+              }`,
               color: view === "feed" ? "#fff" : "#888",
               padding: "8px 20px",
               borderRadius: "20px",
@@ -150,8 +167,13 @@ function App() {
             <button
               onClick={() => setView("account")}
               style={{
-                background: view === "account" ? "rgba(255,255,255,0.1)" : "transparent",
-                border: `1px solid ${view === "account" ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.1)"}`,
+                background:
+                  view === "account" ? "rgba(255,255,255,0.1)" : "transparent",
+                border: `1px solid ${
+                  view === "account"
+                    ? "rgba(255,255,255,0.3)"
+                    : "rgba(255,255,255,0.1)"
+                }`,
                 color: view === "account" ? "#fff" : "#888",
                 padding: "8px 20px",
                 borderRadius: "20px",
@@ -168,8 +190,13 @@ function App() {
             <button
               onClick={() => setView("admin")}
               style={{
-                background: view === "admin" ? "rgba(255,255,255,0.1)" : "transparent",
-                border: `1px solid ${view === "admin" ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.1)"}`,
+                background:
+                  view === "admin" ? "rgba(255,255,255,0.1)" : "transparent",
+                border: `1px solid ${
+                  view === "admin"
+                    ? "rgba(255,255,255,0.3)"
+                    : "rgba(255,255,255,0.1)"
+                }`,
                 color: view === "admin" ? "#fff" : "#888",
                 padding: "8px 20px",
                 borderRadius: "20px",
@@ -226,8 +253,16 @@ function App() {
           <AdminDashboard user={user} onSignOut={handleSignOut} />
         ) : (
           <div style={{ animation: "fadein 1s ease-in" }}>
-            <p style={{ color: "#888", fontSize: "0.9rem", marginBottom: "2rem" }}>
-              {view === "admin" ? "Sign in to access admin features" : "Sign in to view your account"}
+            <p
+              style={{
+                color: "#888",
+                fontSize: "0.9rem",
+                marginBottom: "2rem"
+              }}
+            >
+              {view === "admin"
+                ? "Sign in to access admin features"
+                : "Sign in to view your account"}
             </p>
             <button
               onClick={handleSignIn}
