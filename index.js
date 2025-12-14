@@ -155,7 +155,7 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
   try {
     const safeKeyId = getSafeFirestoreId(keyId);
     // Get stored public key for this device
-    const keyDoc = await db.collection("app_attest_keys").doc(safeKeyId).get();
+    const keyDoc = await db.collection("devices").doc(safeKeyId).get();
     if (!keyDoc.exists) {
       console.error("❌ App Attest key not found:", keyId);
       return false;
@@ -216,7 +216,7 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     }
 
     // Update counter in database
-    await db.collection("app_attest_keys").doc(safeKeyId).update({
+    await db.collection("devices").doc(safeKeyId).update({
       counter,
       lastUsed: admin.firestore.FieldValue.serverTimestamp()
     });
@@ -594,10 +594,7 @@ app.post("/api/secure-key", apiKeyLimiter, async (req, res) => {
     const safeDeviceId = getSafeFirestoreId(deviceId);
 
     // Check if device is revoked BEFORE validation
-    const deviceDoc = await db
-      .collection("device_api_keys")
-      .doc(safeDeviceId)
-      .get();
+    const deviceDoc = await db.collection("devices").doc(safeDeviceId).get();
     if (deviceDoc.exists && deviceDoc.data().revoked) {
       console.log(`🚫 Revoked device attempted access: ${deviceId}`);
       return res.status(403).json({
@@ -657,7 +654,7 @@ app.post("/api/secure-key", apiKeyLimiter, async (req, res) => {
 
       // Update last seen timestamp
       await db
-        .collection("device_api_keys")
+        .collection("devices")
         .doc(safeDeviceId)
         .update({
           lastSeen: admin.firestore.FieldValue.serverTimestamp(),
@@ -681,20 +678,23 @@ app.post("/api/secure-key", apiKeyLimiter, async (req, res) => {
     const encrypted = encryptAPIKeyPerDevice(targetApiKey, deviceId, service);
 
     // Store encrypted key in Firestore (perpetual, but revocable)
-    await db.collection("device_api_keys").doc(safeDeviceId).set({
-      deviceId,
-      service,
-      platform,
-      encryptedKey: encrypted.encryptedKey,
-      iv: encrypted.iv,
-      authTag: encrypted.authTag,
-      issuedAt: admin.firestore.FieldValue.serverTimestamp(),
-      lastSeen: admin.firestore.FieldValue.serverTimestamp(),
-      revoked: false,
-      requestCount: 1,
-      ipAddress: req.ip,
-      version: 1
-    });
+    await db.collection("devices").doc(safeDeviceId).set(
+      {
+        deviceId,
+        service,
+        platform,
+        encryptedKey: encrypted.encryptedKey,
+        iv: encrypted.iv,
+        authTag: encrypted.authTag,
+        issuedAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+        revoked: false,
+        requestCount: 1,
+        ipAddress: req.ip,
+        version: 1
+      },
+      { merge: true }
+    );
 
     console.log(`✅ Issued perpetual key to ${platform} device: ${deviceId}`);
 
@@ -747,14 +747,17 @@ app.post("/api/attest/register", async (req, res) => {
 
     // Store the public key and initial counter
     await db
-      .collection("app_attest_keys")
+      .collection("devices")
       .doc(safeKeyId)
-      .set({
-        publicKey: authData.toString("base64"),
-        counter: 0,
-        registeredAt: admin.firestore.FieldValue.serverTimestamp(),
-        bundleId: process.env.APPLE_BUNDLE_ID
-      });
+      .set(
+        {
+          publicKey: authData.toString("base64"),
+          counter: 0,
+          registeredAt: admin.firestore.FieldValue.serverTimestamp(),
+          bundleId: process.env.APPLE_BUNDLE_ID
+        },
+        { merge: true }
+      );
 
     console.log(`✅ App Attest key registered: ${keyId}`);
 
@@ -921,10 +924,7 @@ app.post("/admin/revoke-device", async (req, res) => {
     const safeDeviceId = getSafeFirestoreId(deviceId);
 
     // Check if device exists
-    const deviceDoc = await db
-      .collection("device_api_keys")
-      .doc(safeDeviceId)
-      .get();
+    const deviceDoc = await db.collection("devices").doc(safeDeviceId).get();
 
     if (!deviceDoc.exists) {
       return res.status(404).json({
@@ -935,7 +935,7 @@ app.post("/admin/revoke-device", async (req, res) => {
 
     // Mark device as revoked
     await db
-      .collection("device_api_keys")
+      .collection("devices")
       .doc(safeDeviceId)
       .update({
         revoked: true,
@@ -999,7 +999,7 @@ app.get("/admin/devices", async (req, res) => {
         .json({ error: "Unauthorized - admin access required" });
     }
 
-    let query = db.collection("device_api_keys").limit(parseInt(limit));
+    let query = db.collection("devices").limit(parseInt(limit));
 
     // Filter by revoked status if specified
     if (revoked !== undefined) {
@@ -1029,6 +1029,39 @@ app.get("/admin/devices", async (req, res) => {
       error: "Internal server error",
       message: error.message
     });
+  }
+});
+
+/**
+ * Public Bills Proxy Endpoint
+ *
+ * GET /api/bills
+ *
+ * Proxies requests to Congress.gov to protect the API key.
+ * Used by the web frontend to avoid exposing secrets in the browser.
+ */
+app.get("/api/bills", congressAPILimiter, async (req, res) => {
+  try {
+    const { limit = 20, offset = 0 } = req.query;
+    const apiKey = process.env.CONGRESS_API_KEY;
+
+    if (!apiKey) {
+      return res.status(500).json({ error: "Congress API key not configured" });
+    }
+
+    const url = `https://api.congress.gov/v3/bill?api_key=${apiKey}&format=json&limit=${limit}&offset=${offset}&sort=updateDate+desc`;
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      throw new Error(`Congress API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error("❌ Bills proxy error:", error);
+    res.status(500).json({ error: "Failed to fetch bills" });
   }
 });
 
