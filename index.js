@@ -801,16 +801,30 @@ app.post("/apple", async (req, res) => {
  * POST /admin/revoke-device
  *
  * Revokes a specific device's API key access.
- * Requires admin secret for authentication.
+ * Requires Firebase ID token from authorized admin (nmcarducci@gmail.com).
  */
 app.post("/admin/revoke-device", async (req, res) => {
   try {
-    const { deviceId, adminSecret, reason } = req.body;
+    const { deviceId, reason, idToken } = req.body;
 
-    // Verify admin credentials
-    if (!adminSecret || adminSecret !== process.env.ADMIN_SECRET) {
-      console.log(`🚫 Unauthorized revocation attempt`);
-      return res.status(403).json({ error: "Unauthorized" });
+    // Verify Firebase ID token
+    if (!idToken) {
+      return res.status(401).json({ error: "Missing authentication token" });
+    }
+
+    let decodedToken;
+    try {
+      decodedToken = await admin.auth().verifyIdToken(idToken);
+    } catch (error) {
+      console.log(`🚫 Invalid Firebase token:`, error.message);
+      return res.status(403).json({ error: "Invalid authentication token" });
+    }
+
+    // Verify admin email
+    const userEmail = decodedToken.email;
+    if (userEmail !== "nmcarducci@gmail.com") {
+      console.log(`🚫 Unauthorized revocation attempt by ${userEmail}`);
+      return res.status(403).json({ error: "Unauthorized - admin access required" });
     }
 
     if (!deviceId) {
@@ -833,10 +847,11 @@ app.post("/admin/revoke-device", async (req, res) => {
     await db.collection("device_api_keys").doc(deviceId).update({
       revoked: true,
       revokedAt: admin.firestore.FieldValue.serverTimestamp(),
-      revokedReason: reason || "Admin revocation"
+      revokedReason: reason || "Admin revocation",
+      revokedBy: userEmail
     });
 
-    console.log(`🚫 Device ${deviceId} revoked: ${reason || "No reason provided"}`);
+    console.log(`🚫 Device ${deviceId} revoked by ${userEmail}: ${reason || "No reason provided"}`);
 
     res.json({
       success: true,
@@ -859,14 +874,30 @@ app.post("/admin/revoke-device", async (req, res) => {
  * GET /admin/devices
  *
  * Lists all registered devices with optional filtering.
+ * Requires Firebase ID token from authorized admin (nmcarducci@gmail.com).
  */
 app.get("/admin/devices", async (req, res) => {
   try {
-    const { adminSecret, limit = 100, revoked } = req.query;
+    const { idToken, limit = 100, revoked } = req.query;
 
-    // Verify admin credentials
-    if (!adminSecret || adminSecret !== process.env.ADMIN_SECRET) {
-      return res.status(403).json({ error: "Unauthorized" });
+    // Verify Firebase ID token
+    if (!idToken) {
+      return res.status(401).json({ error: "Missing authentication token" });
+    }
+
+    let decodedToken;
+    try {
+      decodedToken = await admin.auth().verifyIdToken(idToken);
+    } catch (error) {
+      console.log(`🚫 Invalid Firebase token:`, error.message);
+      return res.status(403).json({ error: "Invalid authentication token" });
+    }
+
+    // Verify admin email
+    const userEmail = decodedToken.email;
+    if (userEmail !== "nmcarducci@gmail.com") {
+      console.log(`🚫 Unauthorized device list attempt by ${userEmail}`);
+      return res.status(403).json({ error: "Unauthorized - admin access required" });
     }
 
     let query = db.collection("device_api_keys").limit(parseInt(limit));
@@ -885,6 +916,8 @@ app.get("/admin/devices", async (req, res) => {
       lastSeen: doc.data().lastSeen?.toDate?.()?.toISOString(),
       revokedAt: doc.data().revokedAt?.toDate?.()?.toISOString()
     }));
+
+    console.log(`📋 Admin ${userEmail} listed ${devices.length} devices`);
 
     res.json({
       success: true,

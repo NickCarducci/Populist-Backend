@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithCustomToken, signOut } from "firebase/auth";
+import AdminDashboard from "./AdminDashboard";
 // Import the functions you need from the SDKs you need
 // https://firebase.google.com/docs/web/setup#available-libraries
 
@@ -86,12 +87,13 @@ function App() {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        height: "100vh",
+        minHeight: "100vh",
         margin: 0,
-        overflow: "hidden"
+        overflow: user ? "auto" : "hidden",
+        padding: user ? "2rem 0" : 0
       }}
     >
-      <div style={{ textAlign: "center", animation: "fadein 2s ease-in" }}>
+      <div style={{ textAlign: "center", animation: "fadein 2s ease-in", width: "100%" }}>
         <h1
           style={{
             fontWeight: 200,
@@ -120,47 +122,7 @@ function App() {
         ) : error ? (
           <div style={{ color: "red" }}>Error: {error}</div>
         ) : user ? (
-          <div style={{ animation: "fadein 1s ease-in" }}>
-            <div
-              style={{
-                padding: "1.5rem",
-                border: "1px solid rgba(255,255,255,0.1)",
-                borderRadius: "16px",
-                background: "rgba(255,255,255,0.03)",
-                backdropFilter: "blur(10px)"
-              }}
-            >
-              <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>🎉</div>
-              <h3 style={{ fontWeight: 500, margin: "0 0 0.5rem 0" }}>
-                Account Verified
-              </h3>
-              <p
-                style={{
-                  color: "#888",
-                  fontSize: "0.8rem",
-                  fontFamily: "monospace",
-                  margin: 0
-                }}
-              >
-                {user.email || user.uid}
-              </p>
-              <button
-                onClick={handleSignOut}
-                style={{
-                  marginTop: "1rem",
-                  background: "transparent",
-                  border: "1px solid rgba(255,255,255,0.2)",
-                  color: "#fff",
-                  padding: "8px 16px",
-                  borderRadius: "20px",
-                  cursor: "pointer",
-                  fontSize: "0.8rem"
-                }}
-              >
-                Sign Out
-              </button>
-            </div>
-          </div>
+          <AdminDashboard user={user} onSignOut={handleSignOut} />
         ) : (
           <button
             onClick={handleSignIn}
