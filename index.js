@@ -363,10 +363,16 @@ app.post("/apple", async (req, res) => {
     }
 
     // Verify the identity token
+    // We must accept both the Service ID (Web) and Bundle ID (iOS App)
+    const validAudiences = [
+      process.env.APPLE_CLIENT_ID,
+      "com.sayists.Populist"
+    ];
+
     const { sub: appleUserId, email } = await appleSignin.verifyIdToken(
       id_token,
       {
-        audience: process.env.APPLE_CLIENT_ID, // Your Apple Service ID
+        audience: validAudiences,
         ignoreExpiration: true
       }
     );
