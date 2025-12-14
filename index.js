@@ -154,21 +154,55 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
       return false;
     }
 
-    const { publicKey, counter: storedCounter } = keyDoc.data();
+    const { publicKey: storedAuthDataBase64, counter: storedCounter } =
+      keyDoc.data();
     const assertion = Buffer.from(assertionBase64, "base64");
 
     // Decode CBOR assertion
     const decodedAssertion = cbor.decodeFirstSync(assertion);
-
-    // Verify signature (simplified - production should use full attestation verification)
     const authenticatorData = decodedAssertion.authenticatorData;
     const signature = decodedAssertion.signature;
     const clientDataHash = Buffer.from(challenge, "base64");
 
+    // 1. Verify Signature
+    // We need to extract the public key from the stored authData (registered previously)
+    // Structure: RPIDHash(32) + Flags(1) + Counter(4) + AAGUID(16) + CredIDLen(2) + CredID(L) + COSEKey(Variable)
+    const storedAuthData = Buffer.from(storedAuthDataBase64, "base64");
+    const credIdLen = storedAuthData.readUInt16BE(53); // Offset 53 is where CredID Len starts
+    const coseKeyBuffer = storedAuthData.subarray(55 + credIdLen); // 55 = 53 + 2 bytes for len
+
+    // Decode COSE Key to get coordinates
+    const coseKey = cbor.decodeFirstSync(coseKeyBuffer);
+
+    // Convert COSE Key to JWK for Node crypto
+    // COSE Keys: 1=kty, 3=alg, -1=crv, -2=x, -3=y
+    const jwk = {
+      kty: "EC",
+      crv: "P-256",
+      x: coseKey.get(-2).toString("base64url"),
+      y: coseKey.get(-3).toString("base64url")
+    };
+
+    // Construct the data that was signed: authenticatorData + clientDataHash
+    const signedData = Buffer.concat([authenticatorData, clientDataHash]);
+
+    // Verify using the public key
+    const isSignatureValid = crypto.verify(
+      "sha256",
+      signedData,
+      { key: jwk, format: "jwk" },
+      signature
+    );
+
+    if (!isSignatureValid) {
+      console.error("❌ App Attest signature verification failed");
+      return false;
+    }
+
     // Extract counter from authenticator data
     const counter = authenticatorData.readUInt32BE(33);
 
-    // Verify counter is incremented (prevents replay attacks)
+    // 2. Verify counter is incremented (prevents replay attacks)
     if (counter <= storedCounter) {
       console.error("❌ App Attest replay attack detected");
       return false;
