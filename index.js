@@ -54,7 +54,13 @@ app.use(
       directives: {
         ...helmet.contentSecurityPolicy.getDefaultDirectives(),
         "style-src": ["'self'", "'unsafe-inline'"],
-        "script-src": ["'self'", "'unsafe-inline'"]
+        "script-src": ["'self'", "'unsafe-inline'"],
+        "connect-src": [
+          "'self'",
+          "https://identitytoolkit.googleapis.com",
+          "https://securetoken.googleapis.com",
+          "https://firestore.googleapis.com"
+        ]
       }
     }
   })
