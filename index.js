@@ -245,8 +245,19 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     console.log(`   ClientHash Len: ${clientDataHash.length}`);
     console.log(`   Signature Len: ${signature.length}`);
     console.log(`   JWK X: ${jwk.x.substring(0, 10)}...`);
+    console.log(
+      `   Public Key Base64: ${storedAuthDataBase64.substring(0, 20)}...`
+    );
     console.log(`   JWK X Len: ${xBuffer.length}`);
     console.log(`   JWK Y Len: ${yBuffer.length}`);
+    console.log(
+      `   AuthData Hex: ${authenticatorData
+        .toString("hex")
+        .substring(0, 20)}...`
+    );
+    console.log(
+      `   ClientHash Hex: ${clientDataHash.toString("hex").substring(0, 20)}...`
+    );
 
     // Construct the data that was signed: authenticatorData + clientDataHash
     const signedData = Buffer.concat([authenticatorData, clientDataHash]);
@@ -822,6 +833,11 @@ app.post("/api/attest/register", async (req, res) => {
 
     if (!authData) {
       throw new Error("Invalid attestation object: missing authData");
+    }
+
+    // Ensure authData is a Buffer before converting to base64
+    if (!Buffer.isBuffer(authData)) {
+      authData = Buffer.from(authData);
     }
 
     // Verify App ID (RPID Hash) matches our TeamID.BundleID
