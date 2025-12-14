@@ -220,9 +220,6 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     const credIdLen = storedAuthData.readUInt16BE(53); // Offset 53 is where CredID Len starts
     const coseKeyBuffer = storedAuthData.subarray(55 + credIdLen); // 55 = 53 + 2 bytes for len
 
-    console.log(`   CredID Len: ${credIdLen}`);
-    console.log(`   COSE Key Buffer Len: ${coseKeyBuffer.length}`);
-
     // Decode COSE Key to get coordinates
     const coseKey = cbor.decodeFirstSync(coseKeyBuffer);
 
@@ -240,43 +237,18 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
       y: yBuffer.toString("base64url")
     };
 
-    console.log(`🔍 Debug: Verifying App Attest Signature`);
-    console.log(`   AuthData Len: ${authenticatorData.length}`);
-    console.log(`   ClientHash Len: ${clientDataHash.length}`);
-    console.log(`   Signature Len: ${signature.length}`);
-    console.log(`   JWK X: ${jwk.x.substring(0, 10)}...`);
-    console.log(
-      `   Public Key Base64: ${storedAuthDataBase64.substring(0, 20)}...`
-    );
-    console.log(`   JWK X Len: ${xBuffer.length}`);
-    console.log(`   JWK Y Len: ${yBuffer.length}`);
-    console.log(
-      `   AuthData Hex: ${authenticatorData
-        .toString("hex")
-        .substring(0, 20)}...`
-    );
-    console.log(
-      `   ClientHash Hex: ${clientDataHash.toString("hex").substring(0, 20)}...`
-    );
-
     // Construct the data that was signed: authenticatorData + clientDataHash
     const signedData = Buffer.concat([authenticatorData, clientDataHash]);
-    const signedDataHash = crypto
-      .createHash("sha256")
-      .update(signedData)
-      .digest("hex");
-    console.log(`   Signed Data Hash: ${signedDataHash.substring(0, 10)}...`);
+
+    // Manually hash the data to ensure consistency
+    const hash = crypto.createHash("sha256").update(signedData).digest();
 
     // Verify using the public key
     let isSignatureValid = false;
     try {
       const publicKey = crypto.createPublicKey({ key: jwk, format: "jwk" });
-      isSignatureValid = crypto.verify(
-        "sha256",
-        signedData,
-        publicKey,
-        signature
-      );
+      // Pass null as algorithm to indicate we are passing the digest (hash) directly
+      isSignatureValid = crypto.verify(null, hash, publicKey, signature);
     } catch (e) {
       console.error("❌ Crypto verification error:", e.message);
       return false;
