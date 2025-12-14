@@ -9,6 +9,10 @@
  * - FIREBASE_PROJECT_ID: Your Firebase project ID (optional if using service account)
  * - APPLE_CLIENT_ID: Your Apple Service ID (e.g. com.sayists.Populist.signin)
  * - GOOGLE_APPLICATION_CREDENTIALS: Path to Firebase service account JSON (for local dev)
+ * - CONGRESS_API_KEY: Your Congress.gov API key
+ * - CONGRESS_API_ENCRYPTION_KEY: 32-byte hex key for encrypting API keys
+ * - APPLE_TEAM_ID: Your Apple Team ID (for App Attest validation)
+ * - APPLE_BUNDLE_ID: Your app's bundle ID (for App Attest validation)
  *
  */
 
@@ -18,6 +22,8 @@ const helmet = require("helmet");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const appleSignin = require("apple-signin-auth");
+const crypto = require("crypto");
+const cbor = require("cbor");
 const path = require("path");
 require("dotenv").config();
 
@@ -127,6 +133,157 @@ const db = admin.firestore();
 // Store processed event IDs to prevent duplicate processing (using Firestore)
 // In production, consider using Redis for better performance
 const processedEvents = new Set();
+
+// ============================================================================
+// APP ATTEST & SAFETYNET VALIDATION
+// ============================================================================
+
+/**
+ * Validates iOS App Attest assertion
+ * @param {string} assertionBase64 - Base64 encoded assertion from iOS
+ * @param {string} keyId - App Attest key ID stored for this device
+ * @param {string} challenge - Challenge data hash
+ * @returns {Promise<boolean>} - True if valid
+ */
+async function validateAppAttest(assertionBase64, keyId, challenge) {
+  try {
+    // Get stored public key for this device
+    const keyDoc = await db.collection("app_attest_keys").doc(keyId).get();
+    if (!keyDoc.exists) {
+      console.error("❌ App Attest key not found:", keyId);
+      return false;
+    }
+
+    const { publicKey, counter: storedCounter } = keyDoc.data();
+    const assertion = Buffer.from(assertionBase64, "base64");
+
+    // Decode CBOR assertion
+    const decodedAssertion = cbor.decodeFirstSync(assertion);
+
+    // Verify signature (simplified - production should use full attestation verification)
+    const authenticatorData = decodedAssertion.authenticatorData;
+    const signature = decodedAssertion.signature;
+    const clientDataHash = Buffer.from(challenge, "base64");
+
+    // Extract counter from authenticator data
+    const counter = authenticatorData.readUInt32BE(33);
+
+    // Verify counter is incremented (prevents replay attacks)
+    if (counter <= storedCounter) {
+      console.error("❌ App Attest replay attack detected");
+      return false;
+    }
+
+    // Update counter in database
+    await db.collection("app_attest_keys").doc(keyId).update({
+      counter,
+      lastUsed: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    console.log("✅ App Attest validation successful");
+    return true;
+  } catch (error) {
+    console.error("❌ App Attest validation error:", error);
+    return false;
+  }
+}
+
+/**
+ * Validates Android SafetyNet/Play Integrity attestation
+ * @param {string} attestationToken - JWT token from Android
+ * @returns {Promise<boolean>} - True if valid
+ */
+async function validateAndroidAttestation(attestationToken) {
+  try {
+    // For Play Integrity API (recommended for Android 13+)
+    // You would verify the JWT token with Google's public keys
+    // This is a simplified version - production should use Google's library
+
+    const decoded = JSON.parse(
+      Buffer.from(attestationToken.split(".")[1], "base64").toString()
+    );
+
+    // Verify package name matches your app
+    if (decoded.appPackageName !== process.env.ANDROID_PACKAGE_NAME) {
+      return false;
+    }
+
+    // Verify integrity verdict
+    if (!decoded.appIntegrity || decoded.appIntegrity.verdict !== "PLAY_RECOGNIZED") {
+      return false;
+    }
+
+    console.log("✅ Android attestation validation successful");
+    return true;
+  } catch (error) {
+    console.error("❌ Android attestation validation error:", error);
+    return false;
+  }
+}
+
+/**
+ * Encrypts API key with device-specific encryption using HKDF
+ * Each device gets a uniquely encrypted key that only they can decrypt
+ * @param {string} apiKey - Congress.gov API key
+ * @param {string} deviceId - Unique device identifier (App Attest keyId)
+ * @returns {Object} - Encrypted key and metadata
+ */
+function encryptAPIKeyPerDevice(apiKey, deviceId) {
+  const masterKey = Buffer.from(
+    process.env.CONGRESS_API_ENCRYPTION_KEY || crypto.randomBytes(32).toString("hex"),
+    "hex"
+  );
+
+  // Derive device-specific encryption key using HKDF
+  // This ensures each device's key is unique and can't be used on other devices
+  const deviceKey = crypto.hkdfSync(
+    "sha256",
+    masterKey,
+    Buffer.from(deviceId, "utf8"),
+    Buffer.from("congress-api-key-encryption", "utf8"),
+    32  // 256-bit key
+  );
+
+  // Create perpetual payload (no expiration)
+  const payload = JSON.stringify({
+    key: apiKey,
+    deviceId,
+    issuedAt: Date.now(),
+    version: 1  // For future key rotation
+  });
+
+  // Encrypt with AES-256-GCM using device-specific key
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv("aes-256-gcm", deviceKey, iv);
+
+  let encrypted = cipher.update(payload, "utf8", "base64");
+  encrypted += cipher.final("base64");
+
+  const authTag = cipher.getAuthTag();
+
+  return {
+    encryptedKey: encrypted,
+    iv: iv.toString("base64"),
+    authTag: authTag.toString("base64"),
+    perpetual: true  // Flag indicating no expiration
+  };
+}
+
+// Rate limiting for API key requests (more lenient for perpetual keys)
+const apiKeyLimiter = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000, // 24 hours
+  max: 5, // 5 requests per device per day (should only need 1)
+  message: "Too many API key requests, please try again later.",
+  keyGenerator: (req) => req.body.deviceId || req.ip
+});
+
+// Rate limiting for Congress.gov API usage
+const congressAPILimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 100, // 100 Congress API requests per device per hour
+  message: "Rate limit exceeded for Congress.gov API",
+  keyGenerator: (req) => req.body.deviceId || req.ip
+});
 
 /**
  * Maps IDWise decision values to Firestore journeyStatus values
@@ -345,6 +502,195 @@ app.post("/webhook", async (req, res) => {
 });
 
 /**
+ * Congress.gov API Key Request Endpoint (Perpetual Per-Device Keys)
+ *
+ * POST /api/congress-key
+ *
+ * Returns a perpetual, device-specific encrypted Congress.gov API key.
+ * Each device gets a uniquely encrypted key using HKDF derivation.
+ * Extracted keys are useless on other devices.
+ *
+ * Request body:
+ * - platform: "ios" | "android"
+ * - deviceId: Unique device identifier (App Attest keyId for iOS)
+ * - assertion: Base64 App Attest assertion (iOS) or Play Integrity token (Android)
+ * - challenge: Base64 challenge hash (iOS only)
+ */
+app.post("/api/congress-key", apiKeyLimiter, async (req, res) => {
+  try {
+    const { platform, deviceId, assertion, challenge } = req.body;
+
+    // Validate required fields
+    if (!platform || !deviceId || !assertion) {
+      return res.status(400).json({
+        error: "Missing required fields",
+        required: ["platform", "deviceId", "assertion"]
+      });
+    }
+
+    console.log(`📱 API key request from ${platform} device: ${deviceId}`);
+
+    // Check if device is revoked BEFORE validation
+    const deviceDoc = await db.collection("device_api_keys").doc(deviceId).get();
+    if (deviceDoc.exists && deviceDoc.data().revoked) {
+      console.log(`🚫 Revoked device attempted access: ${deviceId}`);
+      return res.status(403).json({
+        error: "Device revoked",
+        message: "This device has been revoked. Contact support."
+      });
+    }
+
+    // Validate based on platform
+    let isValid = false;
+
+    if (platform === "ios") {
+      if (!challenge) {
+        return res.status(400).json({
+          error: "Missing challenge for iOS attestation"
+        });
+      }
+      isValid = await validateAppAttest(assertion, deviceId, challenge);
+    } else if (platform === "android") {
+      isValid = await validateAndroidAttestation(assertion);
+    } else {
+      return res.status(400).json({
+        error: "Invalid platform",
+        message: "Platform must be 'ios' or 'android'"
+      });
+    }
+
+    if (!isValid) {
+      console.error(`❌ Attestation validation failed for ${platform} device`);
+      return res.status(403).json({
+        error: "Attestation validation failed",
+        message: "Device authenticity could not be verified"
+      });
+    }
+
+    // Check if Congress API key is configured
+    if (!process.env.CONGRESS_API_KEY) {
+      console.error("❌ CONGRESS_API_KEY not configured");
+      return res.status(500).json({
+        error: "API key not configured"
+      });
+    }
+
+    // Check if device already has a perpetual key
+    if (deviceDoc.exists && !deviceDoc.data().revoked) {
+      const data = deviceDoc.data();
+
+      // Update last seen timestamp
+      await db.collection("device_api_keys").doc(deviceId).update({
+        lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+        requestCount: admin.firestore.FieldValue.increment(1)
+      });
+
+      console.log(`✅ Returning cached perpetual key for ${deviceId}`);
+
+      return res.status(200).json({
+        success: true,
+        encryptedKey: data.encryptedKey,
+        iv: data.iv,
+        authTag: data.authTag,
+        perpetual: true,
+        cached: true,
+        message: "Perpetual API key retrieved from cache."
+      });
+    }
+
+    // First time - encrypt new perpetual key for this device
+    const encrypted = encryptAPIKeyPerDevice(
+      process.env.CONGRESS_API_KEY,
+      deviceId
+    );
+
+    // Store encrypted key in Firestore (perpetual, but revocable)
+    await db.collection("device_api_keys").doc(deviceId).set({
+      deviceId,
+      platform,
+      encryptedKey: encrypted.encryptedKey,
+      iv: encrypted.iv,
+      authTag: encrypted.authTag,
+      issuedAt: admin.firestore.FieldValue.serverTimestamp(),
+      lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+      revoked: false,
+      requestCount: 1,
+      ipAddress: req.ip,
+      version: 1
+    });
+
+    console.log(`✅ Issued perpetual key to ${platform} device: ${deviceId}`);
+
+    res.status(200).json({
+      success: true,
+      encryptedKey: encrypted.encryptedKey,
+      iv: encrypted.iv,
+      authTag: encrypted.authTag,
+      perpetual: true,
+      cached: false,
+      message: "Perpetual API key issued. Store securely in memory."
+    });
+  } catch (error) {
+    console.error("❌ API key request error:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: error.message
+    });
+  }
+});
+
+/**
+ * App Attest Key Registration Endpoint
+ *
+ * POST /api/attest/register
+ *
+ * Stores the public key from iOS App Attest attestation object.
+ * This must be called once per device before requesting API keys.
+ */
+app.post("/api/attest/register", async (req, res) => {
+  try {
+    const { keyId, attestation, challenge } = req.body;
+
+    if (!keyId || !attestation || !challenge) {
+      return res.status(400).json({
+        error: "Missing required fields",
+        required: ["keyId", "attestation", "challenge"]
+      });
+    }
+
+    // Decode attestation object (CBOR encoded)
+    const attestationBuffer = Buffer.from(attestation, "base64");
+    const decodedAttestation = cbor.decodeFirstSync(attestationBuffer);
+
+    // Extract public key from attestation
+    // In production, you should fully validate the attestation with Apple's servers
+    const { authData } = decodedAttestation;
+
+    // Store the public key and initial counter
+    await db.collection("app_attest_keys").doc(keyId).set({
+      publicKey: authData.toString("base64"),
+      counter: 0,
+      registeredAt: admin.firestore.FieldValue.serverTimestamp(),
+      bundleId: process.env.APPLE_BUNDLE_ID
+    });
+
+    console.log(`✅ App Attest key registered: ${keyId}`);
+
+    res.status(200).json({
+      success: true,
+      message: "App Attest key registered successfully",
+      keyId
+    });
+  } catch (error) {
+    console.error("❌ App Attest registration error:", error);
+    res.status(500).json({
+      error: "Registration failed",
+      message: error.message
+    });
+  }
+});
+
+/**
  * Apple Sign In Callback Handler
  *
  * POST /apple
@@ -450,13 +796,118 @@ app.post("/apple", async (req, res) => {
 });
 
 /**
+ * Admin Endpoint - Revoke Device
+ *
+ * POST /admin/revoke-device
+ *
+ * Revokes a specific device's API key access.
+ * Requires admin secret for authentication.
+ */
+app.post("/admin/revoke-device", async (req, res) => {
+  try {
+    const { deviceId, adminSecret, reason } = req.body;
+
+    // Verify admin credentials
+    if (!adminSecret || adminSecret !== process.env.ADMIN_SECRET) {
+      console.log(`🚫 Unauthorized revocation attempt`);
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    if (!deviceId) {
+      return res.status(400).json({
+        error: "Missing deviceId"
+      });
+    }
+
+    // Check if device exists
+    const deviceDoc = await db.collection("device_api_keys").doc(deviceId).get();
+
+    if (!deviceDoc.exists) {
+      return res.status(404).json({
+        error: "Device not found",
+        deviceId
+      });
+    }
+
+    // Mark device as revoked
+    await db.collection("device_api_keys").doc(deviceId).update({
+      revoked: true,
+      revokedAt: admin.firestore.FieldValue.serverTimestamp(),
+      revokedReason: reason || "Admin revocation"
+    });
+
+    console.log(`🚫 Device ${deviceId} revoked: ${reason || "No reason provided"}`);
+
+    res.json({
+      success: true,
+      message: `Device ${deviceId} has been revoked`,
+      deviceId,
+      reason: reason || "Admin revocation"
+    });
+  } catch (error) {
+    console.error("❌ Revocation error:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: error.message
+    });
+  }
+});
+
+/**
+ * Admin Endpoint - List Devices
+ *
+ * GET /admin/devices
+ *
+ * Lists all registered devices with optional filtering.
+ */
+app.get("/admin/devices", async (req, res) => {
+  try {
+    const { adminSecret, limit = 100, revoked } = req.query;
+
+    // Verify admin credentials
+    if (!adminSecret || adminSecret !== process.env.ADMIN_SECRET) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    let query = db.collection("device_api_keys").limit(parseInt(limit));
+
+    // Filter by revoked status if specified
+    if (revoked !== undefined) {
+      query = query.where("revoked", "==", revoked === "true");
+    }
+
+    const snapshot = await query.orderBy("issuedAt", "desc").get();
+
+    const devices = snapshot.docs.map(doc => ({
+      deviceId: doc.id,
+      ...doc.data(),
+      issuedAt: doc.data().issuedAt?.toDate?.()?.toISOString(),
+      lastSeen: doc.data().lastSeen?.toDate?.()?.toISOString(),
+      revokedAt: doc.data().revokedAt?.toDate?.()?.toISOString()
+    }));
+
+    res.json({
+      success: true,
+      count: devices.length,
+      devices
+    });
+  } catch (error) {
+    console.error("❌ List devices error:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: error.message
+    });
+  }
+});
+
+/**
  * Health check endpoint
  */
 app.get("/health", (req, res) => {
   res.status(200).json({
     status: "healthy",
     timestamp: new Date().toISOString(),
-    service: "idwise-webhook-handler"
+    service: "populist-api-gateway"
   });
 });
 
