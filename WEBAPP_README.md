@@ -28,6 +28,7 @@ The web app at **youinpolitics.com** provides three main features:
 ### Current Implementation
 
 Uses **mock data** for now. In the future, this will connect to:
+
 - Your backend `/api/bills` endpoint
 - Same Congress.gov data as mobile app
 - Real-time legislative updates
@@ -86,6 +87,7 @@ See [ADMIN_DASHBOARD.md](ADMIN_DASHBOARD.md) for full documentation.
 The app features **dynamic tab-based navigation**:
 
 ### When Not Signed In
+
 ```
 ┌──────────────────────────────┐
 │     You In Politics          │
@@ -100,6 +102,7 @@ The app features **dynamic tab-based navigation**:
 ```
 
 ### When Signed In (Regular User)
+
 ```
 ┌──────────────────────────────┐
 │     You In Politics          │
@@ -114,6 +117,7 @@ The app features **dynamic tab-based navigation**:
 ```
 
 ### When Signed In (Admin - nmcarducci@gmail.com)
+
 ```
 ┌──────────────────────────────────────┐
 │        You In Politics               │
@@ -128,6 +132,7 @@ The app features **dynamic tab-based navigation**:
 ```
 
 **Dynamic Tab Visibility:**
+
 - **📜 Bills** - Always visible (no auth required)
 - **👤 Account** - Only visible when signed in
 - **🔐 Admin** - Only visible for nmcarducci@gmail.com
@@ -209,6 +214,7 @@ Outputs to `dist/` directory.
 ### Consistency with Mobile App
 
 The web app shares design language with the iOS app:
+
 - Same color scheme
 - Similar typography
 - Matching UI patterns
@@ -216,25 +222,27 @@ The web app shares design language with the iOS app:
 
 ### Differences from Mobile
 
-| Feature | Mobile App | Web App |
-|---------|-----------|---------|
-| **Authentication** | App Attest | Firebase Auth |
-| **Engagement** | Full (vote/comment) | Read-only (for now) |
-| **Notifications** | Push notifications | Email (future) |
-| **Data sync** | iCloud | Firebase |
-| **Target users** | iOS users | All users |
+| Feature            | Mobile App          | Web App             |
+| ------------------ | ------------------- | ------------------- |
+| **Authentication** | App Attest          | Firebase Auth       |
+| **Engagement**     | Full (vote/comment) | Read-only (for now) |
+| **Notifications**  | Push notifications  | Email (future)      |
+| **Data sync**      | iCloud              | Firebase            |
+| **Target users**   | iOS users           | All users           |
 
 ---
 
 ## 🛠️ Technical Stack
 
 ### Frontend
+
 - **React** - UI framework
 - **Vite** - Build tool
 - **Firebase Auth** - Authentication
 - Inline styling (matching admin dashboard)
 
 ### Backend
+
 - **Express.js** - API server
 - **Firebase Admin SDK** - Auth verification
 - **Firestore** - Database
@@ -245,6 +253,7 @@ The web app shares design language with the iOS app:
 ## 📊 Data Flow
 
 ### Bill Feed (Future)
+
 ```
 Congress.gov API
     ↓
@@ -256,6 +265,7 @@ User sees bills
 ```
 
 ### Admin Dashboard
+
 ```
 User signs in with Apple
     ↓
@@ -281,6 +291,7 @@ The bill feed currently uses **hardcoded mock data** in `BillFeed.jsx`. This is 
 3. **Rapid iteration** - Easier to test UI changes
 
 **When ready to connect real data:**
+
 1. Create `/api/bills` endpoint in `index.js`
 2. Add Congress.gov API integration
 3. Update `BillFeed.jsx` to fetch from backend
@@ -289,6 +300,7 @@ The bill feed currently uses **hardcoded mock data** in `BillFeed.jsx`. This is 
 ### Public Access
 
 The bill feed is **intentionally public**:
+
 - No authentication required
 - Good for SEO
 - Drives traffic to the full app
@@ -297,6 +309,7 @@ The bill feed is **intentionally public**:
 ### Mobile-First Design
 
 While responsive, the web app is optimized for **desktop viewing**:
+
 - Wider max-width for bill cards
 - More generous padding
 - Side-by-side layouts
@@ -315,6 +328,7 @@ This web app is a **companion** to the Populist iOS app:
 - **Cross-platform** - Web reaches non-iOS users
 
 Think of it as:
+
 - **Mobile app** = Full-featured, interactive, notifications
 - **Web app** = Discovery, reading, admin tools
 
@@ -323,11 +337,13 @@ Think of it as:
 ## 🔐 Security
 
 ### Bill Feed
+
 - Public, no auth required
 - Read-only, no mutations
 - No sensitive data exposed
 
 ### Admin Dashboard
+
 - Firebase ID token authentication
 - Email-based authorization
 - Backend validates all requests
@@ -344,6 +360,7 @@ See [ADMIN_DASHBOARD.md](ADMIN_DASHBOARD.md) for security details.
 The web app uses **inline styles** instead of CSS files:
 
 **Pros:**
+
 - ✅ Component-scoped (no CSS conflicts)
 - ✅ Dynamic styling with JS logic
 - ✅ Faster initial development
@@ -351,6 +368,7 @@ The web app uses **inline styles** instead of CSS files:
 - ✅ No build-time CSS processing
 
 **Cons:**
+
 - ❌ More verbose
 - ❌ No CSS caching
 - ❌ Harder to maintain at scale
@@ -362,6 +380,7 @@ The web app uses **inline styles** instead of CSS files:
 ## 📈 Metrics to Track
 
 When live, monitor:
+
 - **Page views** - Total visitors
 - **Time on page** - Engagement with bills
 - **Click-through rate** - Bill cards → full details
@@ -373,19 +392,23 @@ When live, monitor:
 ## 🚀 Deployment
 
 ### Current Hosting
+
 Digital Ocean App Platform serves:
+
 - Backend API (Express)
 - Frontend static files (React build)
 
 ### Environment Variables
+
 ```env
 # Backend only, no new vars needed for web app
 CONGRESS_API_KEY=...
-CONGRESS_API_ENCRYPTION_KEY=...
+MASTER_CRYPT_KEY=...
 FIREBASE_SERVICE_ACCOUNT=...
 ```
 
 ### Build Process
+
 ```bash
 # Build frontend
 cd backend

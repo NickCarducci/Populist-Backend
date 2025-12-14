@@ -10,7 +10,7 @@
  * - APPLE_CLIENT_ID: Your Apple Service ID (e.g. com.sayists.Populist.signin)
  * - GOOGLE_APPLICATION_CREDENTIALS: Path to Firebase service account JSON (for local dev)
  * - CONGRESS_API_KEY: Your Congress.gov API key
- * - CONGRESS_API_ENCRYPTION_KEY: 32-byte hex key for encrypting API keys
+ * - MASTER_CRYPT_KEY: 32-byte hex key for encrypting API keys
  * - APPLE_TEAM_ID: Your Apple Team ID (for App Attest validation)
  * - APPLE_BUNDLE_ID: Your app's bundle ID (for App Attest validation)
  *
@@ -209,7 +209,10 @@ async function validateAndroidAttestation(attestationToken) {
     }
 
     // Verify integrity verdict
-    if (!decoded.appIntegrity || decoded.appIntegrity.verdict !== "PLAY_RECOGNIZED") {
+    if (
+      !decoded.appIntegrity ||
+      decoded.appIntegrity.verdict !== "PLAY_RECOGNIZED"
+    ) {
       return false;
     }
 
@@ -226,22 +229,24 @@ async function validateAndroidAttestation(attestationToken) {
  * Each device gets a uniquely encrypted key that only they can decrypt
  * @param {string} apiKey - Congress.gov API key
  * @param {string} deviceId - Unique device identifier (App Attest keyId)
+ * @param {string} service - Service identifier (e.g. "congress") for HKDF context
  * @returns {Object} - Encrypted key and metadata
  */
-function encryptAPIKeyPerDevice(apiKey, deviceId) {
+function encryptAPIKeyPerDevice(apiKey, deviceId, service) {
   const masterKey = Buffer.from(
-    process.env.CONGRESS_API_ENCRYPTION_KEY || crypto.randomBytes(32).toString("hex"),
+    process.env.MASTER_CRYPT_KEY || crypto.randomBytes(32).toString("hex"),
     "hex"
   );
 
   // Derive device-specific encryption key using HKDF
   // This ensures each device's key is unique and can't be used on other devices
+  // We include the service name in the info string to prevent cross-service key usage
   const deviceKey = crypto.hkdfSync(
     "sha256",
     masterKey,
     Buffer.from(deviceId, "utf8"),
-    Buffer.from("congress-api-key-encryption", "utf8"),
-    32  // 256-bit key
+    Buffer.from(`${service}-api-key-encryption`, "utf8"),
+    32 // 256-bit key
   );
 
   // Create perpetual payload (no expiration)
@@ -249,7 +254,7 @@ function encryptAPIKeyPerDevice(apiKey, deviceId) {
     key: apiKey,
     deviceId,
     issuedAt: Date.now(),
-    version: 1  // For future key rotation
+    version: 1 // For future key rotation
   });
 
   // Encrypt with AES-256-GCM using device-specific key
@@ -265,7 +270,7 @@ function encryptAPIKeyPerDevice(apiKey, deviceId) {
     encryptedKey: encrypted,
     iv: iv.toString("base64"),
     authTag: authTag.toString("base64"),
-    perpetual: true  // Flag indicating no expiration
+    perpetual: true // Flag indicating no expiration
   };
 }
 
@@ -502,23 +507,38 @@ app.post("/webhook", async (req, res) => {
 });
 
 /**
- * Congress.gov API Key Request Endpoint (Perpetual Per-Device Keys)
+ * Generic Secure API Key Request Endpoint (Perpetual Per-Device Keys)
  *
- * POST /api/congress-key
+ * POST /api/secure-key
  *
- * Returns a perpetual, device-specific encrypted Congress.gov API key.
+ * Returns a perpetual, device-specific encrypted API key for the requested service.
  * Each device gets a uniquely encrypted key using HKDF derivation.
  * Extracted keys are useless on other devices.
  *
  * Request body:
+ * - service: "congress" | "openai" | etc.
  * - platform: "ios" | "android"
  * - deviceId: Unique device identifier (App Attest keyId for iOS)
  * - assertion: Base64 App Attest assertion (iOS) or Play Integrity token (Android)
  * - challenge: Base64 challenge hash (iOS only)
  */
-app.post("/api/congress-key", apiKeyLimiter, async (req, res) => {
+app.post("/api/secure-key", apiKeyLimiter, async (req, res) => {
   try {
-    const { platform, deviceId, assertion, challenge } = req.body;
+    const {
+      platform,
+      deviceId,
+      assertion,
+      challenge,
+      service = "congress"
+    } = req.body;
+
+    // Map service IDs to Environment Variables
+    const SERVICE_REGISTRY = {
+      congress: "CONGRESS_API_KEY"
+      // Add other read-only services here easily:
+      // "weather": "WEATHER_API_KEY",
+      // "maps": "GOOGLE_MAPS_KEY"
+    };
 
     // Validate required fields
     if (!platform || !deviceId || !assertion) {
@@ -531,7 +551,10 @@ app.post("/api/congress-key", apiKeyLimiter, async (req, res) => {
     console.log(`📱 API key request from ${platform} device: ${deviceId}`);
 
     // Check if device is revoked BEFORE validation
-    const deviceDoc = await db.collection("device_api_keys").doc(deviceId).get();
+    const deviceDoc = await db
+      .collection("device_api_keys")
+      .doc(deviceId)
+      .get();
     if (deviceDoc.exists && deviceDoc.data().revoked) {
       console.log(`🚫 Revoked device attempted access: ${deviceId}`);
       return res.status(403).json({
@@ -567,23 +590,36 @@ app.post("/api/congress-key", apiKeyLimiter, async (req, res) => {
       });
     }
 
-    // Check if Congress API key is configured
-    if (!process.env.CONGRESS_API_KEY) {
-      console.error("❌ CONGRESS_API_KEY not configured");
+    // Check if requested service is configured
+    const envVarName = SERVICE_REGISTRY[service];
+    const targetApiKey = envVarName ? process.env[envVarName] : null;
+
+    if (!targetApiKey) {
+      console.error(`❌ API key for service '${service}' not configured`);
       return res.status(500).json({
-        error: "API key not configured"
+        error: "Service API key not configured"
       });
     }
 
     // Check if device already has a perpetual key
-    if (deviceDoc.exists && !deviceDoc.data().revoked) {
+    // We check if the device has a key specifically for this service
+    // Note: In a multi-key system, you might want to store keys in a sub-collection or map
+    // For now, we assume one key per device or check if the existing key matches the service
+    if (
+      deviceDoc.exists &&
+      !deviceDoc.data().revoked &&
+      deviceDoc.data().service === service
+    ) {
       const data = deviceDoc.data();
 
       // Update last seen timestamp
-      await db.collection("device_api_keys").doc(deviceId).update({
-        lastSeen: admin.firestore.FieldValue.serverTimestamp(),
-        requestCount: admin.firestore.FieldValue.increment(1)
-      });
+      await db
+        .collection("device_api_keys")
+        .doc(deviceId)
+        .update({
+          lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+          requestCount: admin.firestore.FieldValue.increment(1)
+        });
 
       console.log(`✅ Returning cached perpetual key for ${deviceId}`);
 
@@ -599,14 +635,12 @@ app.post("/api/congress-key", apiKeyLimiter, async (req, res) => {
     }
 
     // First time - encrypt new perpetual key for this device
-    const encrypted = encryptAPIKeyPerDevice(
-      process.env.CONGRESS_API_KEY,
-      deviceId
-    );
+    const encrypted = encryptAPIKeyPerDevice(targetApiKey, deviceId, service);
 
     // Store encrypted key in Firestore (perpetual, but revocable)
     await db.collection("device_api_keys").doc(deviceId).set({
       deviceId,
+      service,
       platform,
       encryptedKey: encrypted.encryptedKey,
       iv: encrypted.iv,
@@ -667,12 +701,15 @@ app.post("/api/attest/register", async (req, res) => {
     const { authData } = decodedAttestation;
 
     // Store the public key and initial counter
-    await db.collection("app_attest_keys").doc(keyId).set({
-      publicKey: authData.toString("base64"),
-      counter: 0,
-      registeredAt: admin.firestore.FieldValue.serverTimestamp(),
-      bundleId: process.env.APPLE_BUNDLE_ID
-    });
+    await db
+      .collection("app_attest_keys")
+      .doc(keyId)
+      .set({
+        publicKey: authData.toString("base64"),
+        counter: 0,
+        registeredAt: admin.firestore.FieldValue.serverTimestamp(),
+        bundleId: process.env.APPLE_BUNDLE_ID
+      });
 
     console.log(`✅ App Attest key registered: ${keyId}`);
 
@@ -824,7 +861,9 @@ app.post("/admin/revoke-device", async (req, res) => {
     const userEmail = decodedToken.email;
     if (userEmail !== "nmcarducci@gmail.com") {
       console.log(`🚫 Unauthorized revocation attempt by ${userEmail}`);
-      return res.status(403).json({ error: "Unauthorized - admin access required" });
+      return res
+        .status(403)
+        .json({ error: "Unauthorized - admin access required" });
     }
 
     if (!deviceId) {
@@ -834,7 +873,10 @@ app.post("/admin/revoke-device", async (req, res) => {
     }
 
     // Check if device exists
-    const deviceDoc = await db.collection("device_api_keys").doc(deviceId).get();
+    const deviceDoc = await db
+      .collection("device_api_keys")
+      .doc(deviceId)
+      .get();
 
     if (!deviceDoc.exists) {
       return res.status(404).json({
@@ -844,14 +886,21 @@ app.post("/admin/revoke-device", async (req, res) => {
     }
 
     // Mark device as revoked
-    await db.collection("device_api_keys").doc(deviceId).update({
-      revoked: true,
-      revokedAt: admin.firestore.FieldValue.serverTimestamp(),
-      revokedReason: reason || "Admin revocation",
-      revokedBy: userEmail
-    });
+    await db
+      .collection("device_api_keys")
+      .doc(deviceId)
+      .update({
+        revoked: true,
+        revokedAt: admin.firestore.FieldValue.serverTimestamp(),
+        revokedReason: reason || "Admin revocation",
+        revokedBy: userEmail
+      });
 
-    console.log(`🚫 Device ${deviceId} revoked by ${userEmail}: ${reason || "No reason provided"}`);
+    console.log(
+      `🚫 Device ${deviceId} revoked by ${userEmail}: ${
+        reason || "No reason provided"
+      }`
+    );
 
     res.json({
       success: true,
@@ -897,7 +946,9 @@ app.get("/admin/devices", async (req, res) => {
     const userEmail = decodedToken.email;
     if (userEmail !== "nmcarducci@gmail.com") {
       console.log(`🚫 Unauthorized device list attempt by ${userEmail}`);
-      return res.status(403).json({ error: "Unauthorized - admin access required" });
+      return res
+        .status(403)
+        .json({ error: "Unauthorized - admin access required" });
     }
 
     let query = db.collection("device_api_keys").limit(parseInt(limit));
@@ -909,7 +960,7 @@ app.get("/admin/devices", async (req, res) => {
 
     const snapshot = await query.orderBy("issuedAt", "desc").get();
 
-    const devices = snapshot.docs.map(doc => ({
+    const devices = snapshot.docs.map((doc) => ({
       deviceId: doc.id,
       ...doc.data(),
       issuedAt: doc.data().issuedAt?.toDate?.()?.toISOString(),
