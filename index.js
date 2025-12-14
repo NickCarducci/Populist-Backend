@@ -220,16 +220,20 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     const credIdLen = storedAuthData.readUInt16BE(53); // Offset 53 is where CredID Len starts
     const coseKeyBuffer = storedAuthData.subarray(55 + credIdLen); // 55 = 53 + 2 bytes for len
 
+    console.log(`   CredID Len: ${credIdLen}`);
+    console.log(`   COSE Key Buffer Len: ${coseKeyBuffer.length}`);
+
     // Decode COSE Key to get coordinates
     const coseKey = cbor.decodeFirstSync(coseKeyBuffer);
 
     // Convert COSE Key to JWK for Node crypto
     // COSE Keys: 1=kty, 3=alg, -1=crv, -2=x, -3=y
+    // Ensure x and y are Buffers before converting to base64url
     const jwk = {
       kty: "EC",
       crv: "P-256",
-      x: coseKey.get(-2).toString("base64url"),
-      y: coseKey.get(-3).toString("base64url")
+      x: Buffer.from(coseKey.get(-2)).toString("base64url"),
+      y: Buffer.from(coseKey.get(-3)).toString("base64url")
     };
 
     console.log(`🔍 Debug: Verifying App Attest Signature`);
@@ -803,7 +807,16 @@ app.post("/api/attest/register", async (req, res) => {
 
     // Extract public key from attestation
     // In production, you should fully validate the attestation with Apple's servers
-    const { authData } = decodedAttestation;
+    let authData;
+    if (decodedAttestation instanceof Map) {
+      authData = decodedAttestation.get("authData");
+    } else {
+      authData = decodedAttestation.authData;
+    }
+
+    if (!authData) {
+      throw new Error("Invalid attestation object: missing authData");
+    }
 
     // Verify App ID (RPID Hash) matches our TeamID.BundleID
     if (!verifyAppIdHash(authData)) {
