@@ -226,14 +226,18 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     // Decode COSE Key to get coordinates
     const coseKey = cbor.decodeFirstSync(coseKeyBuffer);
 
+    const xBuffer = Buffer.from(coseKey.get(-2));
+    const yBuffer = Buffer.from(coseKey.get(-3));
+
     // Convert COSE Key to JWK for Node crypto
     // COSE Keys: 1=kty, 3=alg, -1=crv, -2=x, -3=y
     // Ensure x and y are Buffers before converting to base64url
     const jwk = {
       kty: "EC",
       crv: "P-256",
-      x: Buffer.from(coseKey.get(-2)).toString("base64url"),
-      y: Buffer.from(coseKey.get(-3)).toString("base64url")
+      alg: "ES256",
+      x: xBuffer.toString("base64url"),
+      y: yBuffer.toString("base64url")
     };
 
     console.log(`🔍 Debug: Verifying App Attest Signature`);
@@ -241,6 +245,8 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     console.log(`   ClientHash Len: ${clientDataHash.length}`);
     console.log(`   Signature Len: ${signature.length}`);
     console.log(`   JWK X: ${jwk.x.substring(0, 10)}...`);
+    console.log(`   JWK X Len: ${xBuffer.length}`);
+    console.log(`   JWK Y Len: ${yBuffer.length}`);
 
     // Construct the data that was signed: authenticatorData + clientDataHash
     const signedData = Buffer.concat([authenticatorData, clientDataHash]);
