@@ -205,7 +205,12 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
       authenticatorData = Buffer.from(authenticatorData);
     if (!Buffer.isBuffer(signature)) signature = Buffer.from(signature);
 
-    const clientDataHash = Buffer.from(challenge, "base64");
+    // Hash the challenge to match client-side SHA256(challenge)
+    const challengeBuffer = Buffer.from(challenge, "base64");
+    const clientDataHash = crypto
+      .createHash("sha256")
+      .update(challengeBuffer)
+      .digest();
 
     // 0. Verify App ID (RPID Hash)
     if (!verifyAppIdHash(authenticatorData)) {
