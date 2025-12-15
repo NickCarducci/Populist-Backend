@@ -216,6 +216,7 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     // 1. Verify Signature
     // We need to extract the public key from the stored authData (registered previously)
     // Structure: RPIDHash(32) + Flags(1) + Counter(4) + AAGUID(16) + CredIDLen(2) + CredID(L) + COSEKey(Variable)
+    // Reference: https://developer.apple.com/documentation/devicecheck/validating_apps_that_connect_to_your_server
     const storedAuthData = Buffer.from(storedAuthDataBase64, "base64");
     const credIdLen = storedAuthData.readUInt16BE(53); // Offset 53 is where CredID Len starts
     const coseKeyBuffer = storedAuthData.subarray(55 + credIdLen); // 55 = 53 + 2 bytes for len
@@ -240,15 +241,16 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     // Construct the data that was signed: authenticatorData + clientDataHash
     const signedData = Buffer.concat([authenticatorData, clientDataHash]);
 
-    // Manually hash the data to ensure consistency
-    const hash = crypto.createHash("sha256").update(signedData).digest();
-
     // Verify using the public key
     let isSignatureValid = false;
     try {
       const publicKey = crypto.createPublicKey({ key: jwk, format: "jwk" });
-      // Pass null as algorithm to indicate we are passing the digest (hash) directly
-      isSignatureValid = crypto.verify(null, hash, publicKey, signature);
+      isSignatureValid = crypto.verify(
+        "sha256",
+        signedData,
+        publicKey,
+        signature
+      );
     } catch (e) {
       console.error("❌ Crypto verification error:", e.message);
       return false;
