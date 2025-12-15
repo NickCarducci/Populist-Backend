@@ -210,11 +210,16 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     console.log(`DEBUG: Signature Len: ${signature.length}`);
 
     // Hash the challenge to match client-side SHA256(challenge)
-    const challengeBuffer = Buffer.from(challenge, "base64");
+    // Ensure challenge is a clean base64 string
+    const cleanChallenge = challenge.trim();
+    const challengeBuffer = Buffer.from(cleanChallenge, "base64");
     const clientDataHash = crypto
       .createHash("sha256")
       .update(challengeBuffer)
       .digest();
+
+    console.log(`DEBUG: ClientDataHash Hex: ${clientDataHash.toString("hex")}`);
+    console.log(`DEBUG: AuthData Hex: ${authenticatorData.toString("hex")}`);
 
     // 0. Verify App ID (RPID Hash)
     if (!verifyAppIdHash(authenticatorData)) {
