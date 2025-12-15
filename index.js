@@ -205,7 +205,12 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
       authenticatorData = Buffer.from(authenticatorData);
     if (!Buffer.isBuffer(signature)) signature = Buffer.from(signature);
 
-    const clientDataHash = Buffer.from(challenge, "base64");
+    // Hash the challenge to match client-side SHA256(challenge)
+    const challengeBuffer = Buffer.from(challenge, "base64");
+    const clientDataHash = crypto
+      .createHash("sha256")
+      .update(challengeBuffer)
+      .digest();
 
     // 0. Verify App ID (RPID Hash)
     if (!verifyAppIdHash(authenticatorData)) {
@@ -241,16 +246,16 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     // Construct the data that was signed: authenticatorData + clientDataHash
     const signedData = Buffer.concat([authenticatorData, clientDataHash]);
 
+    // Manually hash the data to ensure consistency with App Attest requirements
+    const hash = crypto.createHash("sha256").update(signedData).digest();
+
     // Verify using the public key
     let isSignatureValid = false;
     try {
       const publicKey = crypto.createPublicKey({ key: jwk, format: "jwk" });
-      isSignatureValid = crypto.verify(
-        "sha256",
-        signedData,
-        publicKey,
-        signature
-      );
+      // Pass null as algorithm to indicate we are passing the digest (hash) directly
+      // otherwise: ("sha256", signedData, ...
+      isSignatureValid = crypto.verify(null, hash, publicKey, signature);
     } catch (e) {
       console.error("❌ Crypto verification error:", e.message);
       return false;
