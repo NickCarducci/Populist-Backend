@@ -205,12 +205,7 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
       authenticatorData = Buffer.from(authenticatorData);
     if (!Buffer.isBuffer(signature)) signature = Buffer.from(signature);
 
-    // Hash the challenge to match client-side SHA256(challenge)
-    const challengeBuffer = Buffer.from(challenge, "base64");
-    const clientDataHash = crypto
-      .createHash("sha256")
-      .update(challengeBuffer)
-      .digest();
+    const clientDataHash = Buffer.from(challenge, "base64");
 
     // 0. Verify App ID (RPID Hash)
     if (!verifyAppIdHash(authenticatorData)) {
@@ -229,8 +224,16 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     // Decode COSE Key to get coordinates
     const coseKey = cbor.decodeFirstSync(coseKeyBuffer);
 
-    const xBuffer = Buffer.from(coseKey.get(-2));
-    const yBuffer = Buffer.from(coseKey.get(-3));
+    let xBuffer, yBuffer;
+    if (coseKey instanceof Map) {
+      xBuffer = Buffer.from(coseKey.get(-2));
+      yBuffer = Buffer.from(coseKey.get(-3));
+    } else {
+      // Fallback if cbor returns Object (keys converted to strings)
+      // COSE keys: -2 is x, -3 is y
+      xBuffer = Buffer.from(coseKey["-2"]);
+      yBuffer = Buffer.from(coseKey["-3"]);
+    }
 
     // Convert COSE Key to JWK for Node crypto
     // COSE Keys: 1=kty, 3=alg, -1=crv, -2=x, -3=y
@@ -246,16 +249,17 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     // Construct the data that was signed: authenticatorData + clientDataHash
     const signedData = Buffer.concat([authenticatorData, clientDataHash]);
 
-    // Manually hash the data to ensure consistency with App Attest requirements
-    const hash = crypto.createHash("sha256").update(signedData).digest();
-
     // Verify using the public key
     let isSignatureValid = false;
     try {
       const publicKey = crypto.createPublicKey({ key: jwk, format: "jwk" });
-      // Pass null as algorithm to indicate we are passing the digest (hash) directly
-      // otherwise: ("sha256", signedData, ...
-      isSignatureValid = crypto.verify(null, hash, publicKey, signature);
+      // Use standard verification which handles hashing internally
+      isSignatureValid = crypto.verify(
+        "sha256",
+        signedData,
+        publicKey,
+        signature
+      );
     } catch (e) {
       console.error("❌ Crypto verification error:", e.message);
       return false;
