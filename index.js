@@ -140,15 +140,6 @@ function getSafeFirestoreId(id) {
   return id.replace(/\//g, "_").replace(/\+/g, "-");
 }
 
-// Helper for base64url encoding (robust across Node versions)
-function toBase64Url(buffer) {
-  return buffer
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=/g, "");
-}
-
 /**
  * Verifies that the App ID (RPID Hash) in the authenticator data matches our TeamID.BundleID
  * This ensures the request is coming from OUR app signed by OUR team.
@@ -199,22 +190,22 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     // Decode CBOR assertion
     const decodedAssertion = cbor.decodeFirstSync(assertion);
 
-    // Handle both Map (if configured) and Object returns from cbor
-    let authenticatorData, signature;
-    if (decodedAssertion instanceof Map) {
-      authenticatorData = decodedAssertion.get("authenticatorData");
-      signature = decodedAssertion.get("signature");
-    } else {
-      authenticatorData = decodedAssertion.authenticatorData;
-      signature = decodedAssertion.signature;
-    }
+    let { authenticatorData, signature } = decodedAssertion;
 
     // Ensure we have Buffers (cbor might return Uint8Array)
     if (!Buffer.isBuffer(authenticatorData))
       authenticatorData = Buffer.from(authenticatorData);
     if (!Buffer.isBuffer(signature)) signature = Buffer.from(signature);
 
-    const clientDataHash = Buffer.from(challenge, "base64");
+    console.log(`DEBUG: AuthData Len: ${authenticatorData.length}`);
+    console.log(`DEBUG: Signature Len: ${signature.length}`);
+
+    // Hash the challenge to match client-side SHA256(challenge)
+    const challengeBuffer = Buffer.from(challenge, "base64");
+    const clientDataHash = crypto
+      .createHash("sha256")
+      .update(challengeBuffer)
+      .digest();
 
     // 0. Verify App ID (RPID Hash)
     if (!verifyAppIdHash(authenticatorData)) {
@@ -236,6 +227,8 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     const xBuffer = Buffer.from(coseKey.get(-2));
     const yBuffer = Buffer.from(coseKey.get(-3));
 
+    console.log(`DEBUG: X Len: ${xBuffer.length}, Y Len: ${yBuffer.length}`);
+
     // Convert COSE Key to JWK for Node crypto
     // COSE Keys: 1=kty, 3=alg, -1=crv, -2=x, -3=y
     // Ensure x and y are Buffers before converting to base64url
@@ -243,8 +236,8 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
       kty: "EC",
       crv: "P-256",
       alg: "ES256",
-      x: toBase64Url(xBuffer),
-      y: toBase64Url(yBuffer)
+      x: xBuffer.toString("base64url"),
+      y: yBuffer.toString("base64url")
     };
 
     // Construct the data that was signed: authenticatorData + clientDataHash
@@ -808,12 +801,7 @@ app.post("/api/attest/register", async (req, res) => {
 
     // Extract public key from attestation
     // In production, you should fully validate the attestation with Apple's servers
-    let authData;
-    if (decodedAttestation instanceof Map) {
-      authData = decodedAttestation.get("authData");
-    } else {
-      authData = decodedAttestation.authData;
-    }
+    let { authData } = decodedAttestation;
 
     if (!authData) {
       throw new Error("Invalid attestation object: missing authData");
