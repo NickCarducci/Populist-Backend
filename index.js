@@ -140,6 +140,15 @@ function getSafeFirestoreId(id) {
   return id.replace(/\//g, "_").replace(/\+/g, "-");
 }
 
+// Helper for base64url encoding (robust across Node versions)
+function toBase64Url(buffer) {
+  return buffer
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "");
+}
+
 /**
  * Verifies that the App ID (RPID Hash) in the authenticator data matches our TeamID.BundleID
  * This ensures the request is coming from OUR app signed by OUR team.
@@ -236,9 +245,11 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
       kty: "EC",
       crv: "P-256",
       alg: "ES256",
-      x: xBuffer.toString("base64url"),
-      y: yBuffer.toString("base64url")
+      x: toBase64Url(xBuffer),
+      y: toBase64Url(yBuffer)
     };
+
+    console.log(`DEBUG: JWK X: ${jwk.x.substring(0, 10)}...`);
 
     // Construct the data that was signed: authenticatorData + clientDataHash
     const signedData = Buffer.concat([authenticatorData, clientDataHash]);
