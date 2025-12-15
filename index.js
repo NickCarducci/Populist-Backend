@@ -218,6 +218,9 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
       .update(challengeBuffer)
       .digest();
 
+    console.log(`DEBUG: ClientDataHash Hex: ${clientDataHash.toString("hex")}`);
+    console.log(`DEBUG: AuthData Hex: ${authenticatorData.toString("hex")}`);
+
     // 0. Verify App ID (RPID Hash)
     if (!verifyAppIdHash(authenticatorData)) {
       console.error("❌ App Attest App ID mismatch (RPID Hash)");
@@ -246,6 +249,7 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     const jwk = {
       kty: "EC",
       crv: "P-256",
+      alg: "ES256",
       x: toBase64Url(xBuffer),
       y: toBase64Url(yBuffer)
     };
@@ -253,17 +257,15 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     // Construct the data that was signed: authenticatorData + clientDataHash
     const signedData = Buffer.concat([authenticatorData, clientDataHash]);
 
+    // Manually hash the data to ensure consistency with App Attest requirements
+    const hash = crypto.createHash("sha256").update(signedData).digest();
+
     // Verify using the public key
     let isSignatureValid = false;
     try {
       const publicKey = crypto.createPublicKey({ key: jwk, format: "jwk" });
-      // Use standard verification which handles hashing internally
-      isSignatureValid = crypto.verify(
-        "sha256",
-        signedData,
-        publicKey,
-        signature
-      );
+      // Pass null as algorithm to indicate we are passing the digest (hash) directly
+      isSignatureValid = crypto.verify(null, hash, publicKey, signature);
     } catch (e) {
       console.error("❌ Crypto verification error:", e.message);
       return false;
