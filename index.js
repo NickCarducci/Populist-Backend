@@ -206,16 +206,17 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
       authenticatorData = Buffer.from(authenticatorData);
     if (!Buffer.isBuffer(signature)) signature = Buffer.from(signature);
 
+    console.log(`DEBUG: AuthData Len: ${authenticatorData.length}`);
+    console.log(`DEBUG: Signature Len: ${signature.length}`);
+
     // Hash the challenge to match client-side SHA256(challenge)
     // Ensure challenge is a clean base64 string
-    const cleanChallenge = String(challenge).trim();
+    const cleanChallenge = challenge.trim();
     const challengeBuffer = Buffer.from(cleanChallenge, "base64");
     const clientDataHash = crypto
       .createHash("sha256")
       .update(challengeBuffer)
       .digest();
-
-    console.log(`DEBUG: ClientDataHash Hex: ${clientDataHash.toString("hex")}`);
 
     // 0. Verify App ID (RPID Hash)
     if (!verifyAppIdHash(authenticatorData)) {
@@ -245,7 +246,6 @@ async function validateAppAttest(assertionBase64, keyId, challenge) {
     const jwk = {
       kty: "EC",
       crv: "P-256",
-      alg: "ES256",
       x: toBase64Url(xBuffer),
       y: toBase64Url(yBuffer)
     };
@@ -811,12 +811,7 @@ app.post("/api/attest/register", async (req, res) => {
 
     // Extract public key from attestation
     // In production, you should fully validate the attestation with Apple's servers
-    let authData;
-    if (decodedAttestation instanceof Map) {
-      authData = decodedAttestation.get("authData");
-    } else {
-      authData = decodedAttestation.authData;
-    }
+    let { authData } = decodedAttestation;
 
     if (!authData) {
       throw new Error("Invalid attestation object: missing authData");
