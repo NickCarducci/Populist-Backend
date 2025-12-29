@@ -14,15 +14,10 @@ export default defineConfig(({ mode }) => ({
       output: {
         manualChunks(id) {
           if (id.includes("node_modules")) {
-            // Isolate large, specific libraries first to prevent them from falling into broader categories.
-            if (
-              id.includes("@firebase/firestore") ||
-              id.includes("protobufjs") ||
-              id.includes("long")
-            )
-              return "firestore";
-            if (id.includes("firebase") || id.includes("@firebase"))
+            // Keep all Firebase modules together to avoid initialization issues
+            if (id.includes("firebase") || id.includes("@firebase")) {
               return "firebase";
+            }
             if (
               id.includes("node_modules/react/") ||
               id.includes("node_modules/react-dom/") ||
@@ -38,5 +33,8 @@ export default defineConfig(({ mode }) => ({
         }
       }
     }
+  },
+  optimizeDeps: {
+    include: ['firebase/app', 'firebase/auth', 'firebase/firestore']
   }
 }));
