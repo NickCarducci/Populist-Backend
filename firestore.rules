@@ -84,6 +84,22 @@ service cloud.firestore {
     }
 
     // ============================================================================
+    // BILL VOTE STATISTICS (Public)
+    // ============================================================================
+
+    match /bill_votes/{billId} {
+      // Anyone can read vote statistics
+      allow read: if true;
+
+      // Anyone signed in can update vote counts
+      // (Firestore will validate the increment operations)
+      allow create, update: if isSignedIn();
+
+      // No one can delete vote stats
+      allow delete: if false;
+    }
+
+    // ============================================================================
     // ORGANIZATIONS COLLECTION
     // ============================================================================
 

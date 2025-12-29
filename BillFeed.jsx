@@ -55,16 +55,19 @@ const MOCK_BILLS = [
   }
 ];
 
-function BillFeed({ user }) {
+function BillFeed({ user, onViewBill }) {
   // Initialize with mock bills so the user sees content immediately
   const [bills, setBills] = useState(MOCK_BILLS);
   const [stats, setStats] = useState({}); // Map of billId -> { supportCount, opposeCount, totalVotes, userVote }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const itemsPerPage = 10;
 
   useEffect(() => {
     fetchBills();
-  }, [user]); // Re-fetch if user logs in/out to update vote status
+  }, [user, page]); // Re-fetch if user logs in/out or page changes
 
   // Real-time listener for stats and user votes
   useEffect(() => {
@@ -123,7 +126,8 @@ function BillFeed({ user }) {
       setLoading(true);
       // Call our backend proxy instead of Congress.gov directly
       // This protects the API key from being exposed in the browser
-      const response = await fetch("/api/bills?limit=20");
+      const offset = (page - 1) * itemsPerPage;
+      const response = await fetch(`/api/bills?limit=${itemsPerPage}&offset=${offset}`);
 
       if (!response.ok) {
         throw new Error("Failed to fetch legislation");
@@ -135,6 +139,9 @@ function BillFeed({ user }) {
       if (data.bills && data.bills.length > 0) {
         currentBills = data.bills;
         setBills(currentBills);
+        setHasMore(data.bills.length === itemsPerPage);
+      } else {
+        setHasMore(false);
       }
     } catch (err) {
       console.error("Feed error:", err);
@@ -386,13 +393,17 @@ function BillFeed({ user }) {
               </div>
 
               <button
+                onClick={() => onViewBill && onViewBill(getBillId(bill))}
                 style={{
                   background: "transparent",
                   border: "none",
                   color: "#0A84FF",
                   fontSize: "0.9rem",
-                  cursor: "pointer"
+                  cursor: "pointer",
+                  transition: "opacity 0.2s"
                 }}
+                onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.7"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
               >
                 Read more ›
               </button>
@@ -400,10 +411,80 @@ function BillFeed({ user }) {
           </div>
         );
       })}
+
+      {/* Pagination */}
+      <div style={{
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        gap: "16px",
+        marginTop: "32px",
+        padding: "24px 0"
+      }}>
+        <button
+          onClick={() => setPage(p => Math.max(1, p - 1))}
+          disabled={page === 1}
+          style={{
+            padding: "10px 20px",
+            background: page === 1 ? "rgba(255,255,255,0.05)" : "#0A84FF",
+            border: "none",
+            borderRadius: "8px",
+            color: page === 1 ? "#666" : "#fff",
+            cursor: page === 1 ? "not-allowed" : "pointer",
+            fontSize: "0.9rem",
+            fontWeight: "500",
+            transition: "opacity 0.2s"
+          }}
+          onMouseEnter={(e) => {
+            if (page !== 1) e.currentTarget.style.opacity = "0.8";
+          }}
+          onMouseLeave={(e) => {
+            if (page !== 1) e.currentTarget.style.opacity = "1";
+          }}
+        >
+          ← Previous
+        </button>
+
+        <div style={{
+          padding: "10px 16px",
+          background: "rgba(255,255,255,0.05)",
+          borderRadius: "8px",
+          color: "#fff",
+          fontSize: "0.9rem",
+          fontWeight: "500"
+        }}>
+          Page {page}
+        </div>
+
+        <button
+          onClick={() => setPage(p => p + 1)}
+          disabled={!hasMore}
+          style={{
+            padding: "10px 20px",
+            background: !hasMore ? "rgba(255,255,255,0.05)" : "#0A84FF",
+            border: "none",
+            borderRadius: "8px",
+            color: !hasMore ? "#666" : "#fff",
+            cursor: !hasMore ? "not-allowed" : "pointer",
+            fontSize: "0.9rem",
+            fontWeight: "500",
+            transition: "opacity 0.2s"
+          }}
+          onMouseEnter={(e) => {
+            if (hasMore) e.currentTarget.style.opacity = "0.8";
+          }}
+          onMouseLeave={(e) => {
+            if (hasMore) e.currentTarget.style.opacity = "1";
+          }}
+        >
+          Next →
+        </button>
+      </div>
+
       <div
         style={{
           textAlign: "center",
-          marginTop: "2rem",
+          marginTop: "1rem",
           color: "#444",
           fontSize: "0.8rem"
         }}

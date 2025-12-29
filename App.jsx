@@ -3,6 +3,7 @@ import { signInWithCustomToken, signOut } from "firebase/auth";
 import { auth, db } from "./src/firebase";
 import AdminDashboard from "./AdminDashboard";
 import BillFeed from "./BillFeed";
+import BillDetail from "./BillDetail";
 import UserAccount from "./UserAccount";
 
 function App() {
@@ -10,6 +11,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [view, setView] = useState("feed"); // "feed" | "admin" | "account"
+  const [selectedBillId, setSelectedBillId] = useState(null);
 
   useEffect(() => {
     // Listen for auth state changes (persists session across refreshes)
@@ -61,6 +63,14 @@ function App() {
 
   const handleSignOut = () => {
     signOut(auth);
+  };
+
+  const handleViewBill = (billId) => {
+    setSelectedBillId(billId);
+  };
+
+  const handleBackToFeed = () => {
+    setSelectedBillId(null);
   };
 
   return (
@@ -127,7 +137,10 @@ function App() {
           }}
         >
           <button
-            onClick={() => setView("feed")}
+            onClick={() => {
+              setView("feed");
+              setSelectedBillId(null);
+            }}
             style={{
               background:
                 view === "feed" ? "rgba(255,255,255,0.1)" : "transparent",
@@ -149,7 +162,10 @@ function App() {
           </button>
           {user && (
             <button
-              onClick={() => setView("account")}
+              onClick={() => {
+                setView("account");
+                setSelectedBillId(null);
+              }}
               style={{
                 background:
                   view === "account" ? "rgba(255,255,255,0.1)" : "transparent",
@@ -172,7 +188,10 @@ function App() {
           )}
           {user?.email === "nmcarducci@gmail.com" && (
             <button
-              onClick={() => setView("admin")}
+              onClick={() => {
+                setView("admin");
+                setSelectedBillId(null);
+              }}
               style={{
                 background:
                   view === "admin" ? "rgba(255,255,255,0.1)" : "transparent",
@@ -229,8 +248,10 @@ function App() {
           <div style={{ color: "#666" }}>Loading...</div>
         ) : error ? (
           <div style={{ color: "red" }}>Error: {error}</div>
+        ) : view === "feed" && selectedBillId ? (
+          <BillDetail billId={selectedBillId} onBack={handleBackToFeed} user={user} />
         ) : view === "feed" ? (
-          <BillFeed user={user} />
+          <BillFeed user={user} onViewBill={handleViewBill} />
         ) : view === "account" && user ? (
           <UserAccount user={user} onSignOut={handleSignOut} />
         ) : view === "admin" && user ? (
