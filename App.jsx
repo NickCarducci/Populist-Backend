@@ -1,27 +1,9 @@
 import React, { useState, useEffect } from "react";
-import { initializeApp } from "firebase/app";
-import { getAuth, signInWithCustomToken, signOut } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { signInWithCustomToken, signOut } from "firebase/auth";
+import { auth, db } from "./src/firebase";
 import AdminDashboard from "./AdminDashboard";
 import BillFeed from "./BillFeed";
 import UserAccount from "./UserAccount";
-// Import the functions you need from the SDKs you need
-// https://firebase.google.com/docs/web/setup#available-libraries
-
-// Your web app's Firebase configuration
-const firebaseConfig = {
-  apiKey: "AIzaSyBIWePSPPG4vlaPUkYruZSdOR95NglRT2o",
-  authDomain: "pop-u-list.firebaseapp.com",
-  projectId: "pop-u-list",
-  storageBucket: "pop-u-list.firebasestorage.app",
-  messagingSenderId: "373429951237",
-  appId: "1:373429951237:web:85726684aaa034ec9eb56c"
-};
-
-// Initialize Firebase Client SDK
-export const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-export const db = getFirestore(app);
 
 function App() {
   const [user, setUser] = useState(null);

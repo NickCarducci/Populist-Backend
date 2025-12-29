@@ -1,15 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { db } from "./App";
-import {
-  doc,
-  runTransaction,
-  collection,
-  query,
-  where,
-  documentId,
-  onSnapshot,
-  serverTimestamp
-} from "firebase/firestore";
+import { voteBill, getUserVote, getVoteStats } from "./src/services/firestoreService";
+import { auth, db } from "./src/firebase";
+import { onSnapshot, collection, query, where } from "firebase/firestore";
 
 // Mock data matching BillStore.swift for initial state
 const MOCK_BILLS = [
@@ -66,7 +58,7 @@ const MOCK_BILLS = [
 function BillFeed({ user }) {
   // Initialize with mock bills so the user sees content immediately
   const [bills, setBills] = useState(MOCK_BILLS);
-  const [stats, setStats] = useState({}); // Map of billId -> { supportCount, opposeCount, userVote }
+  const [stats, setStats] = useState({}); // Map of billId -> { supportCount, opposeCount, totalVotes, userVote }
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -80,10 +72,10 @@ function BillFeed({ user }) {
 
     const billIds = bills.map(getBillId);
 
-    // 1. Listen to aggregate stats (bill_stats collection)
+    // 1. Listen to aggregate stats (bill_votes collection - matches iOS)
     const statsQuery = query(
-      collection(db, "bill_stats"),
-      where(documentId(), "in", billIds)
+      collection(db, "bill_votes"),
+      where("__name__", "in", billIds)
     );
 
     const unsubStats = onSnapshot(statsQuery, (snapshot) => {
@@ -94,45 +86,35 @@ function BillFeed({ user }) {
           next[doc.id] = {
             ...next[doc.id],
             supportCount: data.supportCount || 0,
-            opposeCount: data.opposeCount || 0
+            opposeCount: data.opposeCount || 0,
+            totalVotes: data.totalVotes || 0
           };
         });
         return next;
       });
     });
 
-    // 2. Listen to user's own votes (votes collection)
-    let unsubVotes = () => {};
-    if (user) {
-      const votesQuery = query(
-        collection(db, "votes"),
-        where("uid", "==", user.uid),
-        where("billId", "in", billIds)
-      );
+    // 2. Fetch user's votes for all bills (private subcollection - matches iOS)
+    const loadUserVotes = async () => {
+      if (!user) return;
 
-      unsubVotes = onSnapshot(votesQuery, (snapshot) => {
-        setStats((prev) => {
-          const next = { ...prev };
+      for (const billId of billIds) {
+        try {
+          const vote = await getUserVote(billId);
+          setStats((prev) => ({
+            ...prev,
+            [billId]: { ...prev[billId], userVote: vote }
+          }));
+        } catch (err) {
+          console.error(`Error loading vote for ${billId}:`, err);
+        }
+      }
+    };
 
-          // Handle vote changes/removals
-          snapshot.docChanges().forEach((change) => {
-            const data = change.doc.data();
-            const bId = data.billId;
-            if (change.type === "added" || change.type === "modified") {
-              next[bId] = { ...next[bId], userVote: data.voteType };
-            }
-            if (change.type === "removed") {
-              next[bId] = { ...next[bId], userVote: null };
-            }
-          });
-          return next;
-        });
-      });
-    }
+    loadUserVotes();
 
     return () => {
       unsubStats();
-      unsubVotes();
     };
   }, [bills, user]);
 
@@ -176,70 +158,45 @@ function BillFeed({ user }) {
     }
 
     const billId = getBillId(bill);
-    const voteRef = doc(db, "votes", `${user.uid}_${billId}`);
-    const statsRef = doc(db, "bill_stats", billId);
+    const currentVote = stats[billId]?.userVote;
+
+    // Optimistic update
+    setStats((prev) => ({
+      ...prev,
+      [billId]: {
+        ...prev[billId],
+        userVote: currentVote === voteType ? null : voteType
+      }
+    }));
 
     try {
-      await runTransaction(db, async (transaction) => {
-        const voteDoc = await transaction.get(voteRef);
-        const statsDoc = await transaction.get(statsRef);
+      // Use firestoreService for voting (matches iOS VoteService)
+      await voteBill(billId, voteType);
 
-        let supportDelta = 0;
-        let opposeDelta = 0;
+      // Refresh stats after vote
+      const newStats = await getVoteStats(billId);
+      const newVote = await getUserVote(billId);
 
-        if (voteDoc.exists()) {
-          const previousVote = voteDoc.data().voteType;
-
-          if (previousVote === voteType) {
-            // Toggle off (remove vote)
-            transaction.delete(voteRef);
-            if (voteType === "support") supportDelta = -1;
-            else opposeDelta = -1;
-          } else {
-            // Switch vote
-            transaction.update(voteRef, {
-              voteType,
-              updatedAt: serverTimestamp()
-            });
-            if (voteType === "support") {
-              supportDelta = 1;
-              opposeDelta = -1;
-            } else {
-              opposeDelta = 1;
-              supportDelta = -1;
-            }
-          }
-        } else {
-          // New vote
-          transaction.set(voteRef, {
-            uid: user.uid,
-            billId,
-            voteType,
-            createdAt: serverTimestamp()
-          });
-          if (voteType === "support") supportDelta = 1;
-          else opposeDelta = 1;
+      setStats((prev) => ({
+        ...prev,
+        [billId]: {
+          ...newStats,
+          userVote: newVote
         }
-
-        // Update stats
-        const currentStats = statsDoc.exists()
-          ? statsDoc.data()
-          : { supportCount: 0, opposeCount: 0 };
-        const newSupport = (currentStats.supportCount || 0) + supportDelta;
-        const newOppose = (currentStats.opposeCount || 0) + opposeDelta;
-
-        transaction.set(
-          statsRef,
-          {
-            supportCount: Math.max(0, newSupport),
-            opposeCount: Math.max(0, newOppose)
-          },
-          { merge: true }
-        );
-      });
+      }));
     } catch (e) {
       console.error("Vote failed", e);
-      // Ideally revert optimistic update here
+
+      // Revert optimistic update on error
+      setStats((prev) => ({
+        ...prev,
+        [billId]: {
+          ...prev[billId],
+          userVote: currentVote
+        }
+      }));
+
+      alert("Failed to submit vote. Please try again.");
     }
   };
 
@@ -257,9 +214,10 @@ function BillFeed({ user }) {
         const stat = stats[billId] || {
           supportCount: 0,
           opposeCount: 0,
+          totalVotes: 0,
           userVote: null
         };
-        const totalVotes = stat.supportCount + stat.opposeCount;
+        const totalVotes = stat.totalVotes || (stat.supportCount + stat.opposeCount);
         const supportPercent =
           totalVotes > 0
             ? Math.round((stat.supportCount / totalVotes) * 100)

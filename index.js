@@ -1,11 +1,14 @@
 /**
- * IDWise Webhook Handler for Populist App
+ * IDWise/Didit Webhook Handler for Populist App
  *
- * Receives webhook events from IDWise and updates user verification status in Firestore.
+ * Receives webhook events from IDWise and Didit and updates user verification status in Firestore.
  * Supports multiple event types with idempotent processing to prevent duplicate updates.
  *
  * Environment Variables Required:
- * - IDWISE_CLIENT_KEY: Your IDWise client key (for verification)
+ * - IDWISE_CLIENT_KEY: Your IDWise client key (for verification) [Legacy - kept for backward compatibility]
+ * - DIDIT_API_KEY: Your Didit API key (for creating verification sessions)
+ * - DIDIT_WEBHOOK_SECRET: Your Didit webhook secret for HMAC-SHA256 verification
+ * - DIDIT_WORKFLOW_ID: Your Didit workflow ID (configure in Didit dashboard)
  * - FIREBASE_PROJECT_ID: Your Firebase project ID (optional if using service account)
  * - APPLE_CLIENT_ID: Your Apple Service ID (e.g. com.sayists.Populist.signin)
  * - GOOGLE_APPLICATION_CREDENTIALS: Path to Firebase service account JSON (for local dev)
@@ -528,6 +531,117 @@ async function updateUserVerificationStatus(referenceNo, webhookData) {
 }
 
 /**
+ * Update user verification status from Didit webhook
+ *
+ * @param {string} sessionId - Didit session ID
+ * @param {string} status - Verification status (Approved, Declined, In Review, Abandoned)
+ * @param {Object} decision - Verification decision data containing proof_of_address, id_verification, etc.
+ * @param {string} vendorData - Custom data JSON string (contains userId)
+ * @returns {Promise<Object>} - Update result
+ */
+async function updateUserVerificationStatusFromDidit(sessionId, status, decision, vendorData) {
+  try {
+    // Parse vendor_data to get userId
+    let userId;
+    try {
+      const parsedVendorData = JSON.parse(vendorData || '{}');
+      userId = parsedVendorData.userId;
+    } catch (e) {
+      console.error("❌ Failed to parse vendor_data:", e);
+      throw new Error("Invalid vendor_data format");
+    }
+
+    if (!userId) {
+      throw new Error("userId not found in vendor_data");
+    }
+
+    // Map Didit status to our internal status
+    const statusMap = {
+      'Approved': 'verified',
+      'Declined': 'rejected',
+      'In Review': 'under_review',
+      'Abandoned': 'abandoned'
+    };
+
+    const journeyStatus = statusMap[status] || 'unknown';
+
+    // Prepare update data
+    const updateData = {
+      digitSessionId: sessionId,
+      digitVerificationStatus: journeyStatus,
+      lastUpdatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    // Add verification timestamp if approved
+    if (status === 'Approved') {
+      updateData.verifiedAt = admin.firestore.FieldValue.serverTimestamp();
+
+      // Extract proof of address data if available
+      if (decision?.proof_of_address) {
+        updateData.proofOfAddress = {
+          address: decision.proof_of_address.address || null,
+          documentType: decision.proof_of_address.document_type || null,
+          issueDate: decision.proof_of_address.issue_date || null,
+          valid: decision.proof_of_address.valid || false
+        };
+      }
+
+      // Extract ID verification data if available
+      if (decision?.id_verification) {
+        updateData.idVerification = {
+          documentType: decision.id_verification.document_type || null,
+          documentNumber: decision.id_verification.document_number || null,
+          fullName: decision.id_verification.full_name || null,
+          dateOfBirth: decision.id_verification.date_of_birth || null
+        };
+      }
+
+      // Extract face match data if available
+      if (decision?.face_match) {
+        updateData.faceMatch = {
+          score: decision.face_match.score || null,
+          isMatch: decision.face_match.is_match || false
+        };
+      }
+    }
+
+    // Update user document
+    const userRef = db.collection("users").doc(userId);
+    await userRef.update(updateData);
+
+    console.log(`✅ Updated user ${userId} with Didit status: ${journeyStatus}`);
+
+    // Also update the verification session document
+    await db.collection("verification_sessions").doc(sessionId).update({
+      status: journeyStatus,
+      decision: decision || null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    // Log the verification event
+    await db.collection("verification_logs").add({
+      userId,
+      sessionId,
+      provider: 'didit',
+      event: 'status.updated',
+      status: journeyStatus,
+      decision: decision || null,
+      timestamp: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    return {
+      success: true,
+      userId,
+      status: journeyStatus
+    };
+
+  } catch (error) {
+    console.error(`❌ Error updating user from Didit webhook:`, error);
+    throw error;
+  }
+}
+
+/**
  * Main webhook handler endpoint
  *
  * POST /webhook
@@ -610,6 +724,135 @@ app.post("/webhook", async (req, res) => {
     console.error("❌ Webhook processing error:", error);
 
     // Return 500 so IDWise retries
+    res.status(500).json({
+      error: "Internal server error",
+      message: error.message
+    });
+  }
+});
+
+/**
+ * Didit Webhook Handler
+ *
+ * POST /webhook/didit
+ *
+ * Receives webhook events from Didit and updates user verification status.
+ * Implements HMAC-SHA256 signature verification as required by Didit.
+ *
+ * Webhook event types:
+ * - status.updated: Fired when verification status changes or session starts
+ * - data.updated: Triggered when KYC/POA data is manually updated via API
+ */
+app.post("/webhook/didit", limiter, async (req, res) => {
+  try {
+    const signature = req.headers['x-signature'];
+    const timestamp = req.headers['x-timestamp'];
+
+    console.log(`📥 Received Didit webhook`);
+
+    // Validate required headers
+    if (!signature || !timestamp) {
+      console.error("❌ Missing required headers: X-Signature or X-Timestamp");
+      return res.status(401).json({
+        error: "Missing authentication headers"
+      });
+    }
+
+    // Verify signature using HMAC-SHA256
+    const webhookSecret = process.env.DIDIT_WEBHOOK_SECRET;
+    if (!webhookSecret) {
+      console.error("❌ DIDIT_WEBHOOK_SECRET not configured");
+      return res.status(500).json({
+        error: "Server configuration error"
+      });
+    }
+
+    // CRITICAL: Use raw JSON string for HMAC (as per Didit docs)
+    // "Always store and HMAC the raw JSON string (rather than re-stringifying after parsing)"
+    const rawBody = JSON.stringify(req.body);
+    const expectedSignature = crypto
+      .createHmac('sha256', webhookSecret)
+      .update(rawBody)
+      .digest('hex');
+
+    // Use constant-time comparison to prevent timing attacks
+    if (!crypto.timingSafeEqual(
+      Buffer.from(signature),
+      Buffer.from(expectedSignature)
+    )) {
+      console.error("❌ Invalid webhook signature");
+      console.error(`   Expected: ${expectedSignature}`);
+      console.error(`   Received: ${signature}`);
+      return res.status(401).json({
+        error: "Invalid signature"
+      });
+    }
+
+    // Verify timestamp freshness (within 5 minutes)
+    const now = Math.floor(Date.now() / 1000);
+    const timestampInt = parseInt(timestamp);
+    if (Math.abs(now - timestampInt) > 300) {
+      console.error(`❌ Request timestamp too old: ${Math.abs(now - timestampInt)}s`);
+      return res.status(401).json({
+        error: "Request too old"
+      });
+    }
+
+    // Parse webhook payload
+    const { webhook_type, session_id, status, decision, vendor_data, timestamp: eventTimestamp } = req.body;
+
+    console.log(`   Type: ${webhook_type}`);
+    console.log(`   Session ID: ${session_id}`);
+    console.log(`   Status: ${status}`);
+
+    // Validate payload structure
+    if (!webhook_type || !session_id || !status) {
+      console.error("❌ Invalid Didit webhook payload:", req.body);
+      return res.status(400).json({
+        error: "Invalid webhook payload",
+        message: "Missing required fields: webhook_type, session_id, or status"
+      });
+    }
+
+    // Check for idempotency using session_id + webhook_type + timestamp as unique key
+    const eventId = `didit_${session_id}_${webhook_type}_${eventTimestamp || Date.now()}`;
+    const alreadyProcessed = await isEventProcessed(eventId);
+
+    if (alreadyProcessed) {
+      console.log(`⚠️  Didit event ${eventId} already processed, skipping...`);
+      return res.status(200).json({
+        message: "Event already processed",
+        eventId
+      });
+    }
+
+    // Process webhook based on type
+    if (webhook_type === "status.updated") {
+      await updateUserVerificationStatusFromDidit(session_id, status, decision, vendor_data);
+    } else if (webhook_type === "data.updated") {
+      console.log(`ℹ️  Didit data.updated event received for session ${session_id}`);
+      // Optionally re-fetch data and update user document
+      await updateUserVerificationStatusFromDidit(session_id, status, decision, vendor_data);
+    } else {
+      console.log(`ℹ️  Unknown Didit webhook type: ${webhook_type}`);
+    }
+
+    // Mark event as processed
+    await markEventProcessed(eventId, {
+      event: webhook_type,
+      body: { session_id, status }
+    });
+
+    console.log(`✅ Didit webhook processed successfully: ${session_id}`);
+    res.status(200).json({
+      success: true,
+      message: "Webhook processed successfully"
+    });
+
+  } catch (error) {
+    console.error("❌ Didit webhook processing error:", error);
+
+    // Return 500 so Didit retries (automatic retry with exponential backoff)
     res.status(500).json({
       error: "Internal server error",
       message: error.message
@@ -1148,6 +1391,186 @@ app.get("/api/bills", congressAPILimiter, async (req, res) => {
   } catch (error) {
     console.error("❌ Bills proxy error:", error);
     res.status(500).json({ error: "Failed to fetch bills" });
+  }
+});
+
+/**
+ * Create Didit Verification Session
+ *
+ * POST /api/didit/create-session
+ *
+ * Creates a new Didit verification session for authenticated users.
+ * Requires Firebase ID token for authentication.
+ *
+ * Request body:
+ * - idToken: Firebase authentication token
+ * - verificationType: "poa" (proof of address), "id", or "full" (default: "poa")
+ * - metadata: Optional object with additional data (e.g., parentUserId for minors)
+ */
+app.post("/api/didit/create-session", async (req, res) => {
+  try {
+    const { idToken, verificationType, metadata } = req.body;
+
+    // Verify Firebase ID token
+    if (!idToken) {
+      return res.status(401).json({
+        error: "Missing authentication token"
+      });
+    }
+
+    let decodedToken;
+    try {
+      decodedToken = await admin.auth().verifyIdToken(idToken);
+    } catch (error) {
+      console.error("❌ Invalid Firebase token:", error.message);
+      return res.status(403).json({
+        error: "Invalid authentication token"
+      });
+    }
+
+    const userId = decodedToken.uid;
+
+    console.log(`📱 Creating Didit session for user ${userId}`);
+
+    // Call Didit API to create session
+    const diditApiKey = process.env.DIDIT_API_KEY;
+    const diditWorkflowId = process.env.DIDIT_WORKFLOW_ID;
+
+    if (!diditApiKey || !diditWorkflowId) {
+      console.error("❌ Didit credentials not configured");
+      return res.status(500).json({
+        error: "Server configuration error",
+        message: "Didit API credentials not configured"
+      });
+    }
+
+    const response = await fetch('https://verification.didit.me/v2/session/', {
+      method: 'POST',
+      headers: {
+        'x-api-key': diditApiKey,
+        'content-type': 'application/json',
+        'accept': 'application/json'
+      },
+      body: JSON.stringify({
+        workflow_id: diditWorkflowId,
+        callback_url: 'populist://verification-complete',
+        vendor_data: JSON.stringify({ userId, ...metadata })
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("❌ Didit API error:", errorText);
+      throw new Error(`Didit API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const { session_id, session_url } = data;
+
+    if (!session_id || !session_url) {
+      console.error("❌ Invalid response from Didit API:", data);
+      throw new Error("Invalid response from Didit API");
+    }
+
+    // Store session in Firestore
+    await db.collection('verification_sessions').doc(session_id).set({
+      userId,
+      sessionUrl: session_url,
+      provider: 'didit',
+      status: 'pending',
+      verificationType: verificationType || 'poa',
+      metadata: metadata || {},
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    console.log(`✅ Created Didit session for user ${userId}: ${session_id}`);
+
+    res.status(200).json({
+      success: true,
+      sessionId: session_id,
+      sessionUrl: session_url
+    });
+
+  } catch (error) {
+    console.error("❌ Session creation error:", error);
+    res.status(500).json({
+      error: "Failed to create verification session",
+      message: error.message
+    });
+  }
+});
+
+/**
+ * Get Didit Verification Status
+ *
+ * GET /api/didit/status/:sessionId
+ *
+ * Returns the current verification status for a session.
+ * Requires Firebase ID token for authentication.
+ *
+ * Query parameters:
+ * - idToken: Firebase authentication token
+ */
+app.get("/api/didit/status/:sessionId", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { idToken } = req.query;
+
+    // Verify Firebase ID token
+    if (!idToken) {
+      return res.status(401).json({
+        error: "Missing authentication token"
+      });
+    }
+
+    let decodedToken;
+    try {
+      decodedToken = await admin.auth().verifyIdToken(idToken);
+    } catch (error) {
+      console.error("❌ Invalid Firebase token:", error.message);
+      return res.status(403).json({
+        error: "Invalid authentication token"
+      });
+    }
+
+    const userId = decodedToken.uid;
+
+    // Get session from Firestore
+    const sessionDoc = await db.collection('verification_sessions').doc(sessionId).get();
+
+    if (!sessionDoc.exists) {
+      return res.status(404).json({
+        error: "Session not found"
+      });
+    }
+
+    const sessionData = sessionDoc.data();
+
+    // Verify ownership
+    if (sessionData.userId !== userId) {
+      console.log(`🚫 Unauthorized status check by ${userId} for session ${sessionId}`);
+      return res.status(403).json({
+        error: "Unauthorized access to session"
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      sessionId,
+      status: sessionData.status,
+      provider: sessionData.provider,
+      verificationType: sessionData.verificationType,
+      createdAt: sessionData.createdAt,
+      updatedAt: sessionData.updatedAt || null,
+      decision: sessionData.decision || null
+    });
+
+  } catch (error) {
+    console.error("❌ Status check error:", error);
+    res.status(500).json({
+      error: "Failed to check status",
+      message: error.message
+    });
   }
 });
 

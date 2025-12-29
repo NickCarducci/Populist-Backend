@@ -1,7 +1,55 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
+import { observeCurrentUser } from "./src/services/firestoreService";
+import DiditVerificationView from "./src/components/DiditVerificationView";
 
 function UserAccount({ user, onSignOut }) {
   const isAdmin = user?.email === "nmcarducci@gmail.com";
+  const [userData, setUserData] = useState(null);
+  const [showVerification, setShowVerification] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // Observe user data from Firestore for verification status
+  useEffect(() => {
+    if (!user) return;
+
+    const unsubscribe = observeCurrentUser((data) => {
+      setUserData(data);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  const verificationStatus = userData?.digitVerificationStatus || userData?.journeyStatus;
+  const isVerified = verificationStatus === 'verified';
+  const isVerifying = verificationStatus === 'pending' || verificationStatus === 'processing';
+  const hasFailed = verificationStatus === 'failed' || verificationStatus === 'rejected';
+
+  const handleStartVerification = () => {
+    setShowVerification(true);
+  };
+
+  const handleVerificationComplete = (success) => {
+    setShowVerification(false);
+    if (success) {
+      // User data will update via real-time listener
+    }
+  };
+
+  const handleVerificationCancel = () => {
+    setShowVerification(false);
+  };
+
+  // Show verification modal
+  if (showVerification) {
+    return (
+      <DiditVerificationView
+        verificationType="proof_of_address"
+        onComplete={handleVerificationComplete}
+        onCancel={handleVerificationCancel}
+      />
+    );
+  }
 
   return (
     <div
@@ -119,6 +167,127 @@ function UserAccount({ user, onSignOut }) {
               </div>
             </div>
           )}
+
+          {/* Verification Status */}
+          <div style={{ marginTop: "1rem" }}>
+            <label
+              style={{
+                display: "block",
+                color: "#888",
+                fontSize: "0.75rem",
+                marginBottom: "0.5rem",
+                textTransform: "uppercase",
+                letterSpacing: "0.05em"
+              }}
+            >
+              Identity Verification
+            </label>
+            {loading ? (
+              <div style={{ color: "#888", fontSize: "0.85rem" }}>
+                Loading status...
+              </div>
+            ) : isVerified ? (
+              <div
+                style={{
+                  padding: "0.75rem",
+                  background: "rgba(100,255,150,0.1)",
+                  border: "1px solid rgba(100,255,150,0.2)",
+                  borderRadius: "8px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem"
+                }}
+              >
+                <span style={{ fontSize: "1.2rem" }}>✅</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: "#aaffcc", fontSize: "0.85rem", fontWeight: 500 }}>
+                    Verified
+                  </div>
+                  {userData?.verifiedAt && (
+                    <div style={{ color: "#777", fontSize: "0.7rem", marginTop: "2px" }}>
+                      {new Date(userData.verifiedAt.seconds * 1000).toLocaleDateString()}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : isVerifying ? (
+              <div
+                style={{
+                  padding: "0.75rem",
+                  background: "rgba(255,200,100,0.1)",
+                  border: "1px solid rgba(255,200,100,0.2)",
+                  borderRadius: "8px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem"
+                }}
+              >
+                <span style={{ fontSize: "1.2rem" }}>⏳</span>
+                <div style={{ color: "#ffcc88", fontSize: "0.85rem", fontWeight: 500 }}>
+                  Verification in progress...
+                </div>
+              </div>
+            ) : hasFailed ? (
+              <div>
+                <div
+                  style={{
+                    padding: "0.75rem",
+                    background: "rgba(255,100,100,0.1)",
+                    border: "1px solid rgba(255,100,100,0.2)",
+                    borderRadius: "8px",
+                    marginBottom: "0.5rem",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.5rem"
+                  }}
+                >
+                  <span style={{ fontSize: "1.2rem" }}>⚠️</span>
+                  <div style={{ color: "#ffaaaa", fontSize: "0.85rem", fontWeight: 500 }}>
+                    Verification failed
+                  </div>
+                </div>
+                <button
+                  onClick={handleStartVerification}
+                  style={{
+                    width: "100%",
+                    padding: "10px 16px",
+                    background: "#0A84FF",
+                    border: "none",
+                    borderRadius: "8px",
+                    color: "#fff",
+                    fontSize: "0.85rem",
+                    fontWeight: 500,
+                    cursor: "pointer",
+                    transition: "opacity 0.2s"
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.8"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
+                >
+                  Try Again
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={handleStartVerification}
+                style={{
+                  width: "100%",
+                  padding: "10px 16px",
+                  background: "#0A84FF",
+                  border: "none",
+                  borderRadius: "8px",
+                  color: "#fff",
+                  fontSize: "0.85rem",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  transition: "opacity 0.2s"
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.8"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
+              >
+                Start Verification
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Features Section */}

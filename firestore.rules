@@ -1,0 +1,240 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ============================================================================
+    // HELPER FUNCTIONS
+    // ============================================================================
+
+    /// Check if user is authenticated
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    /// Check if user is verified (via IDWise OR Didit)
+    function isVerified() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.digitVerificationStatus == 'verified' ||
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.journeyStatus == 'verified');
+    }
+
+    /// Check if user owns a document
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    /// Check if user is admin (hardcoded for now)
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.email == 'nmcarducci@gmail.com';
+    }
+
+    // ============================================================================
+    // USERS COLLECTION
+    // ============================================================================
+
+    match /users/{userId} {
+      // Anyone authenticated can read user profiles
+      allow read: if isSignedIn();
+
+      // Users can create their own profile during signup
+      allow create: if isSignedIn() && request.auth.uid == userId;
+
+      // Users can only update their own profile
+      allow update: if isOwner(userId);
+
+      // Only admins can delete users
+      allow delete: if isAdmin();
+    }
+
+    // ============================================================================
+    // BILLS COLLECTION
+    // ============================================================================
+
+    match /bills/{billId} {
+      // Anyone can read bills (public data from Congress.gov)
+      allow read: if true;
+
+      // Verified users can create bills
+      allow create: if isVerified();
+
+      // Verified users can update bills (e.g., vote counts)
+      allow update: if isVerified();
+
+      // Only admins can delete bills
+      allow delete: if isAdmin();
+    }
+
+    // ============================================================================
+    // USER VOTES (Private - Per User Subcollection)
+    // ============================================================================
+
+    match /user_votes/{userId}/votes/{billId} {
+      // Users can only read/write their own votes
+      allow read, write: if isOwner(userId);
+    }
+
+    // ============================================================================
+    // USER BOOKMARKS (Private - Per User Subcollection)
+    // ============================================================================
+
+    match /user_bookmarks/{userId}/bookmarks/{billId} {
+      // Users can only read/write their own bookmarks
+      allow read, write: if isOwner(userId);
+    }
+
+    // ============================================================================
+    // ORGANIZATIONS COLLECTION
+    // ============================================================================
+
+    match /organizations/{orgId} {
+      // Anyone can read organizations
+      allow read: if true;
+
+      // Verified users can create organizations
+      allow create: if isVerified() &&
+        request.resource.data.createdBy == request.auth.uid;
+
+      // Creator or admins can update organization
+      allow update: if isVerified() &&
+        (resource.data.createdBy == request.auth.uid ||
+         request.auth.uid in resource.data.get('admins', []));
+
+      // Only creator or admins can delete
+      allow delete: if isVerified() &&
+        (resource.data.createdBy == request.auth.uid ||
+         request.auth.uid in resource.data.get('admins', []));
+    }
+
+    // ============================================================================
+    // ORGANIZATION MESSAGES (Chat)
+    // ============================================================================
+
+    match /organizations/{orgId}/messages/{messageId} {
+      // Members can read messages
+      allow read: if isSignedIn() &&
+        request.auth.uid in get(/databases/$(database)/documents/organizations/$(orgId)).data.get('members', []);
+
+      // Verified members can create messages
+      allow create: if isVerified() &&
+        request.auth.uid in get(/databases/$(database)/documents/organizations/$(orgId)).data.get('members', []) &&
+        request.resource.data.authorId == request.auth.uid;
+
+      // Only author can update their messages (for reactions)
+      // Or members can add reactions
+      allow update: if isSignedIn() &&
+        request.auth.uid in get(/databases/$(database)/documents/organizations/$(orgId)).data.get('members', []);
+
+      // Only author can delete their messages
+      allow delete: if isSignedIn() &&
+        resource.data.authorId == request.auth.uid;
+    }
+
+    // ============================================================================
+    // FORUM POSTS
+    // ============================================================================
+
+    match /forum_posts/{postId} {
+      // Anyone can read forum posts
+      allow read: if true;
+
+      // Verified users can create posts
+      allow create: if isVerified() &&
+        request.resource.data.authorId == request.auth.uid;
+
+      // Only author can update their posts (for likes/shares)
+      // Or anyone can update likedBy array
+      allow update: if isSignedIn();
+
+      // Only author can delete their posts
+      allow delete: if isSignedIn() &&
+        resource.data.authorId == request.auth.uid;
+    }
+
+    // ============================================================================
+    // FORUM POST COMMENTS
+    // ============================================================================
+
+    match /forum_posts/{postId}/comments/{commentId} {
+      // Anyone can read comments
+      allow read: if true;
+
+      // Verified users can create comments
+      allow create: if isVerified() &&
+        request.resource.data.authorId == request.auth.uid;
+
+      // Only author can update their comments
+      allow update: if isSignedIn() &&
+        resource.data.authorId == request.auth.uid;
+
+      // Only author can delete their comments
+      allow delete: if isSignedIn() &&
+        resource.data.authorId == request.auth.uid;
+    }
+
+    // ============================================================================
+    // EVENTS
+    // ============================================================================
+
+    match /events/{eventId} {
+      // Anyone can read events
+      allow read: if true;
+
+      // Verified users can create events
+      allow create: if isVerified() &&
+        request.resource.data.createdBy == request.auth.uid;
+
+      // Only creator can update their events
+      // Or users can update attendees array
+      allow update: if isVerified();
+
+      // Only creator can delete their events
+      allow delete: if isSignedIn() &&
+        resource.data.createdBy == request.auth.uid;
+    }
+
+    // ============================================================================
+    // VERIFICATION SESSIONS (Backend Only)
+    // ============================================================================
+
+    match /verification_sessions/{sessionId} {
+      // Users can read their own sessions
+      allow read: if isSignedIn() &&
+        resource.data.userId == request.auth.uid;
+
+      // Only backend can write (via service account)
+      allow write: if false;
+    }
+
+    // ============================================================================
+    // VERIFICATION LOGS (Backend Only)
+    // ============================================================================
+
+    match /verification_logs/{logId} {
+      // Users can read their own logs
+      allow read: if isSignedIn() &&
+        resource.data.userId == request.auth.uid;
+
+      // Only backend can write (via service account)
+      allow write: if false;
+    }
+
+    // ============================================================================
+    // PROCESSED WEBHOOK EVENTS (Backend Only)
+    // ============================================================================
+
+    match /processed_webhook_events/{eventId} {
+      // No public access
+      allow read, write: if false;
+    }
+
+    // ============================================================================
+    // DEVICES (App Attest - Backend Only)
+    // ============================================================================
+
+    match /devices/{deviceId} {
+      // No public access
+      allow read, write: if false;
+    }
+  }
+}
