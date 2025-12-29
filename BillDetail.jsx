@@ -16,7 +16,14 @@ function BillDetail({ billId, onBack, user }) {
   const fetchBillDetail = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`/api/bills/${billId}`);
+      // billId format is "hr1234-119" (type+number+congress)
+      // Backend expects "119-hr-1234" (congress-type-number)
+      const [typeNumber, congress] = billId.split("-");
+      const type = typeNumber.match(/[a-z]+/i)[0];
+      const number = typeNumber.match(/\d+/)[0];
+      const backendBillId = `${congress}-${type}-${number}`;
+
+      const response = await fetch(`/api/bills/${backendBillId}`);
 
       if (!response.ok) {
         throw new Error("Failed to fetch bill details");
