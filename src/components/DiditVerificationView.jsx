@@ -6,7 +6,6 @@
 
 import React, { useState, useEffect } from 'react';
 import { createVerificationSession, getVerificationStatus } from '../services/diditService';
-import { observeCurrentUser } from '../services/firestoreService';
 
 export default function DiditVerificationView({
   verificationType = 'proof_of_address',

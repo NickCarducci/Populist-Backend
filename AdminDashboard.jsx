@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { getAuth } from "firebase/auth";
+import { auth } from "./src/firebase";
 
 function AdminDashboard({ user, onSignOut }) {
   const [devices, setDevices] = useState([]);
@@ -12,7 +12,6 @@ function AdminDashboard({ user, onSignOut }) {
 
   // Backend URL - adjust if needed
   const BACKEND_URL = window.location.origin;
-  const auth = getAuth();
 
   // Check if user is authorized admin
   useEffect(() => {
