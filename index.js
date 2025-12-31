@@ -1440,6 +1440,94 @@ app.get("/api/bills/:billId", congressAPILimiter, async (req, res) => {
 });
 
 /**
+ * Bill Summaries Endpoint
+ *
+ * GET /api/bills/:billId/summaries
+ *
+ * Fetches summaries for a specific bill (written by CRS legislative analysts).
+ * billId format: "congress-type-number" (e.g., "118-hr-1234")
+ */
+app.get("/api/bills/:billId/summaries", congressAPILimiter, async (req, res) => {
+  try {
+    const { billId } = req.params;
+    const apiKey = process.env.CONGRESS_API_KEY;
+
+    if (!apiKey) {
+      return res.status(500).json({ error: "Congress API key not configured" });
+    }
+
+    const parts = billId.split("-");
+    if (parts.length !== 3) {
+      return res.status(400).json({
+        error: "Invalid bill ID format. Expected format: congress-type-number (e.g., 118-hr-1234)"
+      });
+    }
+
+    const [congress, type, number] = parts;
+    const url = `https://api.congress.gov/v3/bill/${congress}/${type}/${number}/summaries?api_key=${apiKey}&format=json`;
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        return res.status(404).json({ error: "Summaries not found" });
+      }
+      throw new Error(`Congress API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error("❌ Bill summaries proxy error:", error);
+    res.status(500).json({ error: "Failed to fetch bill summaries" });
+  }
+});
+
+/**
+ * Bill Cosponsors Endpoint
+ *
+ * GET /api/bills/:billId/cosponsors
+ *
+ * Fetches cosponsors for a specific bill.
+ * billId format: "congress-type-number" (e.g., "118-hr-1234")
+ */
+app.get("/api/bills/:billId/cosponsors", congressAPILimiter, async (req, res) => {
+  try {
+    const { billId } = req.params;
+    const apiKey = process.env.CONGRESS_API_KEY;
+
+    if (!apiKey) {
+      return res.status(500).json({ error: "Congress API key not configured" });
+    }
+
+    const parts = billId.split("-");
+    if (parts.length !== 3) {
+      return res.status(400).json({
+        error: "Invalid bill ID format. Expected format: congress-type-number (e.g., 118-hr-1234)"
+      });
+    }
+
+    const [congress, type, number] = parts;
+    const url = `https://api.congress.gov/v3/bill/${congress}/${type}/${number}/cosponsors?api_key=${apiKey}&format=json`;
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        return res.status(404).json({ error: "Cosponsors not found" });
+      }
+      throw new Error(`Congress API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error("❌ Bill cosponsors proxy error:", error);
+    res.status(500).json({ error: "Failed to fetch bill cosponsors" });
+  }
+});
+
+/**
  * Create Didit Verification Session
  *
  * POST /api/didit/create-session
