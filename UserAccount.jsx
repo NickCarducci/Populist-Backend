@@ -20,10 +20,10 @@ function UserAccount({ user, onSignOut }) {
     return () => unsubscribe();
   }, [user]);
 
-  const verificationStatus = userData?.digitVerificationStatus || userData?.journeyStatus;
+  const verificationStatus = userData?.digitVerificationStatus;
   const isVerified = verificationStatus === 'verified';
-  const isVerifying = verificationStatus === 'pending' || verificationStatus === 'processing';
-  const hasFailed = verificationStatus === 'failed' || verificationStatus === 'rejected';
+  const isVerifying = verificationStatus === 'pending' || verificationStatus === 'under_review' || verificationStatus === 'in_progress' || verificationStatus === 'submitted';
+  const hasFailed = verificationStatus === 'rejected' || verificationStatus === 'abandoned';
 
   const handleStartVerification = () => {
     setShowVerification(true);
@@ -164,6 +164,47 @@ function UserAccount({ user, onSignOut }) {
                 }}
               >
                 🔐 Admin Access Enabled
+              </div>
+            </div>
+          )}
+
+          {/* Location (if verified) */}
+          {isVerified && (userData?.state || userData?.locality) && (
+            <div style={{ marginTop: "1rem" }}>
+              <label
+                style={{
+                  display: "block",
+                  color: "#888",
+                  fontSize: "0.75rem",
+                  marginBottom: "0.5rem",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em"
+                }}
+              >
+                Verified Location
+              </label>
+              <div
+                style={{
+                  padding: "0.75rem",
+                  background: "rgba(100,150,255,0.1)",
+                  border: "1px solid rgba(100,150,255,0.2)",
+                  borderRadius: "8px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem"
+                }}
+              >
+                <span style={{ fontSize: "1.2rem" }}>📍</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: "#aaccff", fontSize: "0.9rem", fontWeight: 500 }}>
+                    {userData.locality && userData.state
+                      ? `${userData.locality}, ${userData.state}`
+                      : userData.state || userData.locality}
+                  </div>
+                  <div style={{ color: "#777", fontSize: "0.7rem", marginTop: "2px" }}>
+                    Bills filtered to your area
+                  </div>
+                </div>
               </div>
             </div>
           )}

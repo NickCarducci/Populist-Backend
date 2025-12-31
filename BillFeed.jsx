@@ -236,14 +236,15 @@ function BillFeed({ user, onViewBill }) {
             style={{
               backgroundColor: "rgba(28, 28, 30, 1)", // iOS System Gray 6 (Dark Mode)
               borderRadius: "12px",
-              padding: "24px",
               marginBottom: "16px",
               border: "1px solid rgba(255,255,255,0.1)",
               textAlign: "left",
               transition: "transform 0.2s ease",
-              cursor: "default"
+              cursor: "default",
+              overflow: "hidden" // For poll bar to touch edges
             }}
           >
+            <div style={{ padding: "24px" }}>
             <div
               style={{
                 display: "flex",
@@ -407,6 +408,58 @@ function BillFeed({ user, onViewBill }) {
               >
                 Read more ›
               </button>
+            </div>
+            </div>
+
+            {/* Poll Results Bar (matches iOS CollapsedPollBar) */}
+            <div style={{ position: "relative", height: "28px", width: "100%" }}>
+              <div style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                display: "flex"
+              }}>
+                <div style={{
+                  backgroundColor: "#34C759", // iOS Green
+                  width: `${supportPercent}%`,
+                  transition: "width 0.3s ease"
+                }} />
+                <div style={{
+                  backgroundColor: "#FF453A", // iOS Red
+                  flex: 1
+                }} />
+              </div>
+              <div style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "0 8px",
+                pointerEvents: "none"
+              }}>
+                <span style={{
+                  color: "#fff",
+                  fontSize: "0.7rem",
+                  fontWeight: "600",
+                  textShadow: "0 1px 2px rgba(0,0,0,0.3)"
+                }}>
+                  {supportPercent}%
+                </span>
+                <span style={{
+                  color: "#fff",
+                  fontSize: "0.7rem",
+                  fontWeight: "600",
+                  textShadow: "0 1px 2px rgba(0,0,0,0.3)"
+                }}>
+                  {100 - supportPercent}%
+                </span>
+              </div>
             </div>
           </div>
         );
