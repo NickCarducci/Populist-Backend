@@ -581,6 +581,70 @@ async function updateUserVerificationStatusFromDidit(sessionId, status, decision
       // Extract proof of address data if available
       if (decision?.proof_of_address) {
         const fullAddress = decision.proof_of_address.address || null;
+        const nameOnPoA = decision.proof_of_address.name_on_document || decision.proof_of_address.name || null;
+
+        // CRITICAL SECURITY CHECK: Verify name on PoA matches Government ID
+        if (decision?.id_verification && nameOnPoA) {
+          const idFullName = decision.id_verification.full_name || '';
+          const idLastName = decision.id_verification.last_name || '';
+
+          // Normalize names for comparison (lowercase, trim whitespace)
+          const normalizedPoAName = nameOnPoA.toLowerCase().trim();
+          const normalizedIdName = idFullName.toLowerCase().trim();
+          const normalizedLastName = idLastName.toLowerCase().trim();
+
+          // Check if PoA name contains the ID last name (most important match)
+          const lastNameMatches = normalizedPoAName.includes(normalizedLastName);
+
+          // Also check full name match
+          const fullNameMatches = normalizedPoAName.includes(normalizedIdName) ||
+                                   normalizedIdName.includes(normalizedPoAName);
+
+          if (!lastNameMatches && !fullNameMatches) {
+            console.error(`🚨 SECURITY: Name mismatch detected!`);
+            console.error(`   Government ID: "${idFullName}"`);
+            console.error(`   Proof of Address: "${nameOnPoA}"`);
+            console.error(`   User ID: ${userId}`);
+
+            // REJECT the verification
+            updateData.digitVerificationStatus = 'rejected';
+            updateData.verificationError = 'Name on Proof of Address does not match Government ID';
+            updateData.verificationErrorDetails = {
+              idName: idFullName,
+              poaName: nameOnPoA,
+              reason: 'name_mismatch'
+            };
+
+            // Update user with rejection
+            const userRef = db.collection("users").doc(userId);
+            await userRef.update(updateData);
+
+            // Log security event
+            await db.collection("security_logs").add({
+              type: 'verification_name_mismatch',
+              userId,
+              sessionId,
+              idName: idFullName,
+              poaName: nameOnPoA,
+              timestamp: admin.firestore.FieldValue.serverTimestamp()
+            });
+
+            console.log(`❌ Verification REJECTED for user ${userId} due to name mismatch`);
+            return {
+              success: false,
+              userId,
+              status: 'rejected',
+              reason: 'name_mismatch'
+            };
+          } else {
+            console.log(`✅ Name validation passed: "${nameOnPoA}" matches "${idFullName}"`);
+          }
+        } else if (!decision?.id_verification) {
+          // PoA submitted without Government ID - require both
+          console.warn(`⚠️ PoA submitted without Government ID verification for user ${userId}`);
+          updateData.digitVerificationStatus = 'pending';
+          updateData.verificationError = 'Government ID verification required before Proof of Address';
+        }
 
         // Parse address to extract state and locality
         let state = null;
@@ -606,6 +670,7 @@ async function updateUserVerificationStatusFromDidit(sessionId, status, decision
 
         updateData.proofOfAddress = {
           address: fullAddress,
+          nameOnDocument: nameOnPoA, // Store for audit trail
           documentType: decision.proof_of_address.document_type || null,
           issueDate: decision.proof_of_address.issue_date || null,
           valid: decision.proof_of_address.valid || false
@@ -1576,7 +1641,7 @@ app.get("/api/bills/:billId/cosponsors", congressAPILimiter, async (req, res) =>
  */
 app.post("/api/didit/create-session", async (req, res) => {
   try {
-    const { idToken, verificationType, metadata } = req.body;
+    const { idToken, verificationType, metadata, platform } = req.body;
 
     // Verify Firebase ID token
     if (!idToken) {
@@ -1597,7 +1662,7 @@ app.post("/api/didit/create-session", async (req, res) => {
 
     const userId = decodedToken.uid;
 
-    console.log(`📱 Creating Didit session for user ${userId}`);
+    console.log(`📱 Creating Didit session for user ${userId} on platform: ${platform || 'ios'}`);
 
     // Call Didit API to create session
     const diditApiKey = process.env.DIDIT_API_KEY;
@@ -1611,6 +1676,17 @@ app.post("/api/didit/create-session", async (req, res) => {
       });
     }
 
+    // Select callback URL based on platform
+    // - Web uses workflow default (HTTPS URL from dashboard)
+    // - iOS passes custom scheme dynamically in session creation
+    const isWeb = platform === 'web';
+    const callbackUrl = isWeb
+      ? 'https://youinpolitics.com/verification-complete'
+      : 'populist://verification-complete';
+
+    console.log(`   Using workflow: ${diditWorkflowId}`);
+    console.log(`   Callback URL: ${callbackUrl}`);
+
     const response = await fetch('https://verification.didit.me/v2/session/', {
       method: 'POST',
       headers: {
@@ -1620,8 +1696,8 @@ app.post("/api/didit/create-session", async (req, res) => {
       },
       body: JSON.stringify({
         workflow_id: diditWorkflowId,
-        callback_url: 'populist://verification-complete',
-        vendor_data: JSON.stringify({ userId, ...metadata })
+        callback_url: callbackUrl,
+        vendor_data: JSON.stringify({ userId, platform: platform || 'ios', ...metadata })
       })
     });
 

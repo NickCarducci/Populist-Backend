@@ -33,8 +33,10 @@ export async function createVerificationSession(
         'Authorization': `Bearer ${idToken}`,
       },
       body: JSON.stringify({
+        idToken,
         verificationType,
         metadata,
+        platform: 'web',
       }),
     });
 

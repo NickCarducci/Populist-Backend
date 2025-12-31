@@ -20,6 +20,25 @@ function App() {
       setLoading(false);
     });
 
+    // Check for Didit verification callback
+    if (window.location.pathname === '/verification-complete') {
+      const query = new URLSearchParams(window.location.search);
+      const sessionId = query.get('session_id');
+      const status = query.get('status');
+
+      console.log('✅ Didit verification complete!');
+      console.log('   Session ID:', sessionId);
+      console.log('   Status:', status);
+
+      // Show success message briefly, then redirect to account
+      setTimeout(() => {
+        window.location.href = '/'; // Redirect to home
+        setView('account'); // Show account view
+      }, 2000);
+
+      return () => unsubscribe();
+    }
+
     // Check for token and uid in URL params (returned from backend redirect)
     const query = new URLSearchParams(window.location.search);
     const token = query.get("token");
