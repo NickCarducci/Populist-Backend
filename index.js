@@ -1,11 +1,13 @@
 /**
- * IDWise/Didit Webhook Handler for Populist App
+ * Didit Webhook Handler for Populist App
  *
- * Receives webhook events from IDWise and Didit and updates user verification status in Firestore.
+ * Receives webhook events from Didit and updates user verification status in Firestore.
  * Supports multiple event types with idempotent processing to prevent duplicate updates.
  *
+ * NOTE: IDWise support has been removed. Legacy journeyId/journeyStatus fields in Firestore
+ * are preserved for backward compatibility with existing users but new verifications use Didit only.
+ *
  * Environment Variables Required:
- * - IDWISE_CLIENT_KEY: Your IDWise client key (for verification) [Legacy - kept for backward compatibility]
  * - DIDIT_API_KEY: Your Didit API key (for creating verification sessions)
  * - DIDIT_WEBHOOK_SECRET: Your Didit webhook secret for HMAC-SHA256 verification
  * - DIDIT_WORKFLOW_ID: Your Didit workflow ID (configure in Didit dashboard)
@@ -74,7 +76,7 @@ app.use(
     }
   })
 );
-app.use(cors({ origin: true })); // In production, restrict to IDWise IPs
+app.use(cors({ origin: true })); // In production, restrict to Didit IPs if provided
 app.use(express.json());
 app.use(express.urlencoded({ extended: true })); // Required for Apple Sign In form-post
 
@@ -578,12 +580,44 @@ async function updateUserVerificationStatusFromDidit(sessionId, status, decision
 
       // Extract proof of address data if available
       if (decision?.proof_of_address) {
+        const fullAddress = decision.proof_of_address.address || null;
+
+        // Parse address to extract state and locality
+        let state = null;
+        let locality = null;
+
+        if (fullAddress) {
+          // Address format: "123 Main St, San Francisco, CA 94102"
+          // Split by comma and extract components
+          const addressParts = fullAddress.split(',').map(p => p.trim());
+
+          if (addressParts.length >= 3) {
+            // Get locality (city) - second to last part
+            locality = addressParts[addressParts.length - 2];
+
+            // Get state from last part (e.g., "CA 94102" -> "CA")
+            const lastPart = addressParts[addressParts.length - 1];
+            const stateMatch = lastPart.match(/^([A-Z]{2})/);
+            if (stateMatch) {
+              state = stateMatch[1];
+            }
+          }
+        }
+
         updateData.proofOfAddress = {
-          address: decision.proof_of_address.address || null,
+          address: fullAddress,
           documentType: decision.proof_of_address.document_type || null,
           issueDate: decision.proof_of_address.issue_date || null,
           valid: decision.proof_of_address.valid || false
         };
+
+        // Store parsed location data at top level for easy querying
+        if (state) {
+          updateData.state = state;
+        }
+        if (locality) {
+          updateData.locality = locality;
+        }
       }
 
       // Extract ID verification data if available

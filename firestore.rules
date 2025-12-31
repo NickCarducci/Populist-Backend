@@ -11,12 +11,11 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    /// Check if user is verified (via IDWise OR Didit)
+    /// Check if user is verified via Didit
     function isVerified() {
       return isSignedIn() &&
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.digitVerificationStatus == 'verified' ||
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.journeyStatus == 'verified');
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.digitVerificationStatus == 'verified';
     }
 
     /// Check if user owns a document
@@ -45,6 +44,22 @@ service cloud.firestore {
 
       // Only admins can delete users
       allow delete: if isAdmin();
+
+      // ============================================================================
+      // USER BILL VOTES (Subcollection)
+      // ============================================================================
+      match /billVotes/{billId} {
+        // Users can only read/write their own votes
+        allow read, write: if isOwner(userId);
+      }
+
+      // ============================================================================
+      // USER BILL BOOKMARKS (Subcollection)
+      // ============================================================================
+      match /billBookmarks/{billId} {
+        // Users can only read/write their own bookmarks
+        allow read, write: if isOwner(userId);
+      }
     }
 
     // ============================================================================
