@@ -1637,6 +1637,67 @@ app.get("/api/bills/:billId/cosponsors", congressAPILimiter, async (req, res) =>
 app.get("/api/representatives/:bioguideId", congressAPILimiter, async (req, res) => {
   try {
     const { bioguideId } = req.params;
+
+    // Handle mock representatives for testing
+    if (bioguideId.startsWith('MOCK')) {
+      const mockReps = {
+        'MOCK001': {
+          member: {
+            bioguideId: 'MOCK001',
+            name: 'Johnson, Sarah',
+            partyName: 'Independent',
+            state: 'XX',
+            district: '5',
+            depiction: { imageUrl: null },
+            terms: {
+              item: [{
+                congress: '120',
+                chamber: 'House',
+                startYear: '2025',
+                endYear: '2027'
+              }]
+            },
+            officialWebsiteUrl: null,
+            addressInformation: {
+              officeAddress: '1234 Sample House Office Building',
+              phoneNumber: '(202) 555-0100'
+            }
+          }
+        },
+        'MOCK002': {
+          member: {
+            bioguideId: 'MOCK002',
+            name: 'Chen, Michael',
+            partyName: 'Democratic',
+            state: 'YY',
+            district: null,
+            depiction: { imageUrl: null },
+            terms: {
+              item: [{
+                congress: '120',
+                chamber: 'Senate',
+                startYear: '2023',
+                endYear: '2029'
+              }]
+            },
+            officialWebsiteUrl: null,
+            addressInformation: {
+              officeAddress: '5678 Sample Senate Office Building',
+              phoneNumber: '(202) 555-0200'
+            }
+          }
+        }
+      };
+
+      const mockData = mockReps[bioguideId];
+      if (mockData) {
+        return res.json(mockData);
+      } else {
+        return res.status(404).json({ error: "Mock representative not found" });
+      }
+    }
+
+    // Real API call for non-mock IDs
     const apiKey = process.env.CONGRESS_API_KEY;
 
     if (!apiKey) {
@@ -1674,14 +1735,90 @@ app.get("/api/representatives/:bioguideId/votes", congressAPILimiter, async (req
   try {
     const { bioguideId } = req.params;
     const { limit = 20 } = req.query;
+
+    // Handle mock vote data for testing
+    if (bioguideId.startsWith('MOCK')) {
+      const mockVotes = {
+        'MOCK001': {
+          votes: [
+            {
+              congress: 120,
+              session: 1,
+              rollNumber: 100,
+              date: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+              question: 'On Passage of H.R. 1234, Sample Infrastructure Bill',
+              description: 'To authorize infrastructure improvements',
+              result: 'Passed',
+              bill: { type: 'HR', number: '1234', title: 'Sample Infrastructure Bill' },
+              members: { member: [{ bioguideId: 'MOCK001', vote: 'Yea' }] }
+            },
+            {
+              congress: 120,
+              session: 1,
+              rollNumber: 101,
+              date: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+              question: 'On Passage of H.R. 567, Education Funding Act',
+              description: 'To increase funding for public education',
+              result: 'Passed',
+              bill: { type: 'HR', number: '567', title: 'Education Funding Act' },
+              members: { member: [{ bioguideId: 'MOCK001', vote: 'Present' }] }
+            },
+            {
+              congress: 120,
+              session: 1,
+              rollNumber: 99,
+              date: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+              question: 'On Passage of H.R. 2000, Sample Tax Bill',
+              description: 'To modify federal tax provisions',
+              result: 'Failed',
+              bill: { type: 'HR', number: '2000', title: 'Sample Tax Bill' },
+              members: { member: [{ bioguideId: 'MOCK001', vote: 'Nay' }] }
+            }
+          ]
+        },
+        'MOCK002': {
+          votes: [
+            {
+              congress: 120,
+              session: 1,
+              rollNumber: 100,
+              date: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+              question: 'On Passage of S. 1234, Sample Infrastructure Bill',
+              description: 'To authorize infrastructure improvements',
+              result: 'Passed',
+              bill: { type: 'S', number: '1234', title: 'Sample Infrastructure Bill' },
+              members: { member: [{ bioguideId: 'MOCK002', vote: 'Yea' }] }
+            },
+            {
+              congress: 120,
+              session: 1,
+              rollNumber: 102,
+              date: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+              question: 'On Passage of S. 800, Budget Authorization',
+              description: 'To authorize federal budget for FY2026',
+              result: 'Passed',
+              bill: { type: 'S', number: '800', title: 'Budget Authorization' },
+              members: { member: [{ bioguideId: 'MOCK002', vote: 'Yea' }] }
+            }
+          ]
+        }
+      };
+
+      const mockData = mockVotes[bioguideId];
+      if (mockData) {
+        return res.json(mockData);
+      } else {
+        return res.status(404).json({ error: "Mock votes not found" });
+      }
+    }
+
+    // Real API call for non-mock IDs
     const apiKey = process.env.CONGRESS_API_KEY;
 
     if (!apiKey) {
       return res.status(500).json({ error: "Congress API key not configured" });
     }
 
-    // Get current congress number (120 as of 2026)
-    const currentCongress = 120;
     const url = `https://api.congress.gov/v3/member/${bioguideId}/votes?api_key=${apiKey}&format=json&limit=${limit}`;
 
     const response = await fetch(url);
