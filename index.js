@@ -1627,6 +1627,81 @@ app.get("/api/bills/:billId/cosponsors", congressAPILimiter, async (req, res) =>
 });
 
 /**
+ * Representative Profile Endpoint
+ *
+ * GET /api/representatives/:bioguideId
+ *
+ * Fetches detailed profile for a specific representative.
+ * bioguideId format: Bioguide ID (e.g., "M001233")
+ */
+app.get("/api/representatives/:bioguideId", congressAPILimiter, async (req, res) => {
+  try {
+    const { bioguideId } = req.params;
+    const apiKey = process.env.CONGRESS_API_KEY;
+
+    if (!apiKey) {
+      return res.status(500).json({ error: "Congress API key not configured" });
+    }
+
+    const url = `https://api.congress.gov/v3/member/${bioguideId}?api_key=${apiKey}&format=json`;
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        return res.status(404).json({ error: "Representative not found" });
+      }
+      throw new Error(`Congress API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error("❌ Representative profile proxy error:", error);
+    res.status(500).json({ error: "Failed to fetch representative profile" });
+  }
+});
+
+/**
+ * Representative Voting History Endpoint
+ *
+ * GET /api/representatives/:bioguideId/votes
+ *
+ * Fetches voting history for a specific representative.
+ * bioguideId format: Bioguide ID (e.g., "M001233")
+ */
+app.get("/api/representatives/:bioguideId/votes", congressAPILimiter, async (req, res) => {
+  try {
+    const { bioguideId } = req.params;
+    const { limit = 20 } = req.query;
+    const apiKey = process.env.CONGRESS_API_KEY;
+
+    if (!apiKey) {
+      return res.status(500).json({ error: "Congress API key not configured" });
+    }
+
+    // Get current congress number (120 as of 2026)
+    const currentCongress = 120;
+    const url = `https://api.congress.gov/v3/member/${bioguideId}/votes?api_key=${apiKey}&format=json&limit=${limit}`;
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        return res.status(404).json({ error: "Voting records not found" });
+      }
+      throw new Error(`Congress API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error("❌ Representative votes proxy error:", error);
+    res.status(500).json({ error: "Failed to fetch voting records" });
+  }
+});
+
+/**
  * Create Didit Verification Session
  *
  * POST /api/didit/create-session
