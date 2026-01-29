@@ -5,30 +5,37 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { createVerificationSession, getVerificationStatus } from '../services/diditService';
+import { createVerificationSession } from '../services/diditService';
 
+/**
+ * DiditVerificationView Component
+ *
+ * Shows an iframe for Didit identity verification.
+ * The parent component (UserAccount) detects completion via real-time Firestore listener
+ * and auto-closes this modal - no polling needed.
+ */
 export default function DiditVerificationView({
   verificationType = 'proof_of_address',
   onComplete,
-  onCancel
+  onCancel,
+  isVerified = false // Passed from parent when real-time listener detects completion
 }) {
   const [sessionUrl, setSessionUrl] = useState(null);
   const [sessionId, setSessionId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [status, setStatus] = useState('initializing');
-  const [pollingInterval, setPollingInterval] = useState(null);
+
+  // Show success state when parent detects verification via real-time listener
+  useEffect(() => {
+    if (isVerified) {
+      setStatus('verified');
+    }
+  }, [isVerified]);
 
   // Start verification session on mount
   useEffect(() => {
     initializeVerification();
-
-    return () => {
-      // Cleanup polling on unmount
-      if (pollingInterval) {
-        clearInterval(pollingInterval);
-      }
-    };
   }, []);
 
   const initializeVerification = async () => {
@@ -47,8 +54,7 @@ export default function DiditVerificationView({
       setStatus('ready');
       setLoading(false);
 
-      // Start polling for status updates
-      startPolling(newSessionId);
+      // No polling needed - parent component detects completion via real-time Firestore listener
     } catch (err) {
       console.error('Failed to initialize verification:', err);
       setError(err.message || 'Failed to start verification session');
@@ -56,39 +62,7 @@ export default function DiditVerificationView({
     }
   };
 
-  const startPolling = (sid) => {
-    // Poll every 3 seconds for status updates
-    const interval = setInterval(async () => {
-      try {
-        const statusData = await getVerificationStatus(sid);
-
-        if (statusData.status === 'verified') {
-          clearInterval(interval);
-          setStatus('verified');
-
-          // Wait for webhook to update user record, then complete
-          setTimeout(() => {
-            if (onComplete) {
-              onComplete(true);
-            }
-          }, 2000);
-        } else if (statusData.status === 'failed') {
-          clearInterval(interval);
-          setStatus('failed');
-          setError('Verification failed. Please try again.');
-        }
-      } catch (err) {
-        console.error('Error polling verification status:', err);
-      }
-    }, 3000);
-
-    setPollingInterval(interval);
-  };
-
   const handleCancel = () => {
-    if (pollingInterval) {
-      clearInterval(pollingInterval);
-    }
     if (onCancel) {
       onCancel();
     }

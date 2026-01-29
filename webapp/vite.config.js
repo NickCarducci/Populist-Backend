@@ -10,6 +10,8 @@ export default defineConfig(({ mode }) => ({
     "process.env.NODE_ENV": JSON.stringify(mode)
   },
   build: {
+    outDir: "/var/www/webapp", // Target the public Caddy folder
+    emptyOutDir: true, // Clear old files before building
     rollupOptions: {
       output: {
         manualChunks(id) {
@@ -35,6 +37,6 @@ export default defineConfig(({ mode }) => ({
     }
   },
   optimizeDeps: {
-    include: ['firebase/app', 'firebase/auth', 'firebase/firestore']
+    include: ["firebase/app", "firebase/auth", "firebase/firestore"]
   }
 }));

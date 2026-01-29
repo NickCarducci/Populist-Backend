@@ -1,8 +1,11 @@
-dist/
 node_modules/
 .env
 .DS_Store
 *.log
+
+# Build artifacts
+dist/
+webapp/dist/
 
 # Security: Ignore Firebase Service Account Keys
 pop-u-list-firebase-adminsdk.json

@@ -25,6 +25,17 @@ function UserAccount({ user, onSignOut }) {
   const isVerifying = verificationStatus === 'pending' || verificationStatus === 'under_review' || verificationStatus === 'in_progress' || verificationStatus === 'submitted';
   const hasFailed = verificationStatus === 'rejected' || verificationStatus === 'abandoned';
 
+  // Auto-close verification modal when status becomes verified (detected via real-time listener)
+  useEffect(() => {
+    if (showVerification && isVerified) {
+      // Small delay to show success state before closing
+      const timer = setTimeout(() => {
+        setShowVerification(false);
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [showVerification, isVerified]);
+
   const handleStartVerification = () => {
     setShowVerification(true);
   };
@@ -47,6 +58,7 @@ function UserAccount({ user, onSignOut }) {
         verificationType="proof_of_address"
         onComplete={handleVerificationComplete}
         onCancel={handleVerificationCancel}
+        isVerified={isVerified}
       />
     );
   }

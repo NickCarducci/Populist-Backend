@@ -30,6 +30,7 @@ const appleSignin = require("apple-signin-auth");
 const crypto = require("crypto");
 const cbor = require("cbor");
 const path = require("path");
+const { MongoClient } = require("mongodb");
 require("dotenv").config();
 
 // Initialize Express app
@@ -89,7 +90,7 @@ const limiter = rateLimit({
 app.use("/webhook", limiter);
 
 // Serve static files (CSS, Images, HTML) from React app build directory
-app.use(express.static(path.join(__dirname, "dist")));
+app.use(express.static(path.join(__dirname, "webapp", "dist")));
 
 // Initialize Firebase Admin SDK
 if (!admin.apps.length) {
@@ -134,6 +135,46 @@ if (!admin.apps.length) {
 }
 
 const db = admin.firestore();
+
+// ============================================================================
+// MONGODB SETUP (For Analytics Aggregation)
+// ============================================================================
+
+let mongoClient = null;
+let mongoDB = null;
+
+async function connectMongoDB() {
+  if (!process.env.MONGODB_URI) {
+    console.warn("⚠️  MONGODB_URI not configured. Analytics features disabled.");
+    return null;
+  }
+
+  try {
+    mongoClient = new MongoClient(process.env.MONGODB_URI);
+    await mongoClient.connect();
+    mongoDB = mongoClient.db("populist");
+
+    // Create indexes for efficient queries
+    await mongoDB.collection("votes").createIndex({ billId: 1 });
+    await mongoDB.collection("votes").createIndex({ billId: 1, politicalParty: 1 });
+    await mongoDB.collection("votes").createIndex({ billId: 1, state: 1 });
+    await mongoDB.collection("votes").createIndex({ billId: 1, educationExpertise: 1 });
+    await mongoDB.collection("votes").createIndex({ billId: 1, employmentExpertise: 1 });
+    await mongoDB.collection("votes").createIndex({ timestamp: -1 });
+    await mongoDB.collection("votes").createIndex({ userId: 1, billId: 1 }, { unique: true });
+    await mongoDB.collection("votes").createIndex({ userId: 1 }); // For user-based queries
+    await mongoDB.collection("votes").createIndex({ billCommittees: 1 }); // For thumbprint analysis
+
+    console.log("✅ MongoDB connected successfully");
+    return mongoDB;
+  } catch (error) {
+    console.error("❌ MongoDB connection error:", error);
+    return null;
+  }
+}
+
+// Connect on startup
+connectMongoDB();
 
 // Store processed event IDs to prevent duplicate processing (using Firestore)
 // In production, consider using Redis for better performance
@@ -2029,6 +2070,908 @@ app.get("/api/didit/status/:sessionId", async (req, res) => {
   }
 });
 
+// ============================================================================
+// VOTE ENDPOINTS (Firestore + MongoDB for Analytics)
+// ============================================================================
+
+/**
+ * Cast a vote on a bill
+ *
+ * POST /api/vote
+ *
+ * Records vote in both Firestore (real-time UI) and MongoDB (analytics).
+ * Captures user demographics for cross-sectional analysis.
+ *
+ * Request body:
+ * - idToken: Firebase authentication token
+ * - billId: Bill identifier (e.g., "118-hr-1234")
+ * - vote: 'support' or 'oppose'
+ * - billCommittees: (optional) Array of committee names for thumbprint analysis
+ */
+app.post("/api/vote", async (req, res) => {
+  try {
+    const { idToken, billId, vote, billCommittees = [] } = req.body;
+
+    // Validate required fields
+    if (!idToken || !billId || !vote) {
+      return res.status(400).json({
+        error: "Missing required fields",
+        required: ["idToken", "billId", "vote"]
+      });
+    }
+
+    if (!["support", "oppose"].includes(vote)) {
+      return res.status(400).json({
+        error: "Invalid vote value",
+        message: "Vote must be 'support' or 'oppose'"
+      });
+    }
+
+    // Verify Firebase ID token
+    let decodedToken;
+    try {
+      decodedToken = await admin.auth().verifyIdToken(idToken);
+    } catch (error) {
+      console.error("❌ Invalid Firebase token:", error.message);
+      return res.status(403).json({
+        error: "Invalid authentication token"
+      });
+    }
+
+    const userId = decodedToken.uid;
+
+    // Fetch user profile for demographics
+    const userDoc = await db.collection("users").doc(userId).get();
+    const userData = userDoc.exists ? userDoc.data() : {};
+
+    // Check for existing vote
+    const existingVoteDoc = await db
+      .collection("user_votes")
+      .doc(userId)
+      .collection("votes")
+      .doc(billId)
+      .get();
+
+    const existingVote = existingVoteDoc.exists ? existingVoteDoc.data().vote : null;
+
+    // Update Firestore vote counts
+    const billVotesRef = db.collection("bill_votes").doc(billId);
+
+    if (existingVote) {
+      // Remove previous vote count
+      if (existingVote === "support") {
+        await billVotesRef.update({
+          supportCount: admin.firestore.FieldValue.increment(-1),
+          totalVotes: admin.firestore.FieldValue.increment(-1)
+        });
+      } else {
+        await billVotesRef.update({
+          opposeCount: admin.firestore.FieldValue.increment(-1),
+          totalVotes: admin.firestore.FieldValue.increment(-1)
+        });
+      }
+    }
+
+    // Record new vote in user_votes collection with demographics
+    await db
+      .collection("user_votes")
+      .doc(userId)
+      .collection("votes")
+      .doc(billId)
+      .set({
+        vote,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        billCommittees: Array.isArray(billCommittees) ? billCommittees : [],
+        state: userData.state || null,
+        ageRange: userData.ageRange || null,
+        employmentExpertise: userData.employmentExpertise || null,
+        educationExpertise: userData.educationExpertise || null,
+        hobbyExpertise: userData.hobbyExpertise || null,
+        politicalParty: userData.politicalParty || null,
+        verified: userData.digitVerificationStatus === "verified"
+      });
+
+    // Update aggregate vote counts
+    if (vote === "support") {
+      await billVotesRef.set(
+        {
+          supportCount: admin.firestore.FieldValue.increment(1),
+          totalVotes: admin.firestore.FieldValue.increment(1)
+        },
+        { merge: true }
+      );
+    } else {
+      await billVotesRef.set(
+        {
+          opposeCount: admin.firestore.FieldValue.increment(1),
+          totalVotes: admin.firestore.FieldValue.increment(1)
+        },
+        { merge: true }
+      );
+    }
+
+    // Write to MongoDB for analytics (if connected)
+    if (mongoDB) {
+      const voteDoc = {
+        billId,
+        vote,
+        userId,
+        timestamp: new Date(),
+        // Bill metadata for thumbprint analysis
+        billCommittees: Array.isArray(billCommittees) ? billCommittees : [],
+        // Demographics from user profile
+        state: userData.state || null,
+        ageRange: userData.ageRange || null,
+        employmentExpertise: userData.employmentExpertise || null,
+        educationExpertise: userData.educationExpertise || null,
+        hobbyExpertise: userData.hobbyExpertise || null,
+        politicalParty: userData.politicalParty || null,
+        verified: userData.digitVerificationStatus === "verified"
+      };
+
+      // Upsert to handle vote changes
+      await mongoDB.collection("votes").updateOne(
+        { userId, billId },
+        { $set: voteDoc },
+        { upsert: true }
+      );
+    }
+
+    console.log(`✅ Vote recorded: ${userId} voted ${vote} on ${billId}`);
+
+    res.status(200).json({
+      success: true,
+      message: "Vote recorded successfully",
+      billId,
+      vote
+    });
+
+  } catch (error) {
+    console.error("❌ Vote error:", error);
+    res.status(500).json({
+      error: "Failed to record vote",
+      message: error.message
+    });
+  }
+});
+
+/**
+ * Get vote analytics for a bill
+ *
+ * GET /api/analytics/bill/:billId
+ *
+ * Returns vote breakdown by demographics.
+ *
+ * Query parameters:
+ * - groupBy: 'politicalParty', 'state', 'educationExpertise', 'employmentExpertise', 'ageRange', 'verified'
+ */
+app.get("/api/analytics/bill/:billId", async (req, res) => {
+  try {
+    const { billId } = req.params;
+    const { groupBy = "politicalParty" } = req.query;
+
+    // Validate groupBy field
+    const validGroupBy = [
+      "politicalParty",
+      "state",
+      "educationExpertise",
+      "employmentExpertise",
+      "hobbyExpertise",
+      "ageRange",
+      "verified"
+    ];
+
+    if (!validGroupBy.includes(groupBy)) {
+      return res.status(400).json({
+        error: "Invalid groupBy parameter",
+        valid: validGroupBy
+      });
+    }
+
+    if (!mongoDB) {
+      return res.status(503).json({
+        error: "Analytics service unavailable",
+        message: "MongoDB not connected"
+      });
+    }
+
+    const pipeline = [
+      { $match: { billId } },
+      {
+        $group: {
+          _id: `$${groupBy}`,
+          supportCount: {
+            $sum: { $cond: [{ $eq: ["$vote", "support"] }, 1, 0] }
+          },
+          opposeCount: {
+            $sum: { $cond: [{ $eq: ["$vote", "oppose"] }, 1, 0] }
+          },
+          total: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          category: { $ifNull: ["$_id", "Not Specified"] },
+          supportCount: 1,
+          opposeCount: 1,
+          total: 1,
+          supportPercentage: {
+            $cond: [
+              { $eq: ["$total", 0] },
+              0,
+              { $multiply: [{ $divide: ["$supportCount", "$total"] }, 100] }
+            ]
+          },
+          opposePercentage: {
+            $cond: [
+              { $eq: ["$total", 0] },
+              0,
+              { $multiply: [{ $divide: ["$opposeCount", "$total"] }, 100] }
+            ]
+          }
+        }
+      },
+      { $sort: { total: -1 } }
+    ];
+
+    const results = await mongoDB
+      .collection("votes")
+      .aggregate(pipeline)
+      .toArray();
+
+    // Calculate totals
+    const totals = results.reduce(
+      (acc, row) => {
+        acc.supportCount += row.supportCount;
+        acc.opposeCount += row.opposeCount;
+        acc.total += row.total;
+        return acc;
+      },
+      { supportCount: 0, opposeCount: 0, total: 0 }
+    );
+
+    res.status(200).json({
+      success: true,
+      billId,
+      groupBy,
+      totals: {
+        ...totals,
+        supportPercentage:
+          totals.total > 0 ? (totals.supportCount / totals.total) * 100 : 0,
+        opposePercentage:
+          totals.total > 0 ? (totals.opposeCount / totals.total) * 100 : 0
+      },
+      breakdown: results
+    });
+
+  } catch (error) {
+    console.error("❌ Analytics error:", error);
+    res.status(500).json({
+      error: "Failed to fetch analytics",
+      message: error.message
+    });
+  }
+});
+
+/**
+ * Get multi-dimensional analytics for a bill
+ *
+ * GET /api/analytics/bill/:billId/detailed
+ *
+ * Returns comprehensive breakdown by all demographics in one call.
+ */
+app.get("/api/analytics/bill/:billId/detailed", async (req, res) => {
+  try {
+    const { billId } = req.params;
+
+    if (!mongoDB) {
+      return res.status(503).json({
+        error: "Analytics service unavailable",
+        message: "MongoDB not connected"
+      });
+    }
+
+    const dimensions = [
+      "politicalParty",
+      "state",
+      "educationExpertise",
+      "employmentExpertise",
+      "ageRange",
+      "verified"
+    ];
+
+    const results = {};
+
+    for (const dimension of dimensions) {
+      const pipeline = [
+        { $match: { billId } },
+        {
+          $group: {
+            _id: `$${dimension}`,
+            supportCount: {
+              $sum: { $cond: [{ $eq: ["$vote", "support"] }, 1, 0] }
+            },
+            opposeCount: {
+              $sum: { $cond: [{ $eq: ["$vote", "oppose"] }, 1, 0] }
+            },
+            total: { $sum: 1 }
+          }
+        },
+        {
+          $project: {
+            _id: 0,
+            category: { $ifNull: ["$_id", "Not Specified"] },
+            supportCount: 1,
+            opposeCount: 1,
+            total: 1,
+            supportPercentage: {
+              $cond: [
+                { $eq: ["$total", 0] },
+                0,
+                { $multiply: [{ $divide: ["$supportCount", "$total"] }, 100] }
+              ]
+            }
+          }
+        },
+        { $sort: { total: -1 } }
+      ];
+
+      results[dimension] = await mongoDB
+        .collection("votes")
+        .aggregate(pipeline)
+        .toArray();
+    }
+
+    // Get overall totals
+    const totalPipeline = [
+      { $match: { billId } },
+      {
+        $group: {
+          _id: null,
+          supportCount: {
+            $sum: { $cond: [{ $eq: ["$vote", "support"] }, 1, 0] }
+          },
+          opposeCount: {
+            $sum: { $cond: [{ $eq: ["$vote", "oppose"] }, 1, 0] }
+          },
+          total: { $sum: 1 }
+        }
+      }
+    ];
+
+    const totalResult = await mongoDB
+      .collection("votes")
+      .aggregate(totalPipeline)
+      .toArray();
+
+    const totals = totalResult[0] || { supportCount: 0, opposeCount: 0, total: 0 };
+
+    res.status(200).json({
+      success: true,
+      billId,
+      totals: {
+        supportCount: totals.supportCount,
+        opposeCount: totals.opposeCount,
+        total: totals.total,
+        supportPercentage:
+          totals.total > 0 ? (totals.supportCount / totals.total) * 100 : 0,
+        opposePercentage:
+          totals.total > 0 ? (totals.opposeCount / totals.total) * 100 : 0
+      },
+      breakdown: results
+    });
+
+  } catch (error) {
+    console.error("❌ Detailed analytics error:", error);
+    res.status(500).json({
+      error: "Failed to fetch detailed analytics",
+      message: error.message
+    });
+  }
+});
+
+// ============================================
+// USER ANALYTICS & THUMBPRINT COMPARISON ENDPOINTS
+// ============================================
+
+/**
+ * Get user's voting history with cohort comparison
+ *
+ * GET /api/analytics/user/:userId/cohort-comparison
+ *
+ * Returns how the user's votes compare against various demographic cohorts.
+ */
+app.get("/api/analytics/user/:userId/cohort-comparison", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (!mongoDB) {
+      return res.status(503).json({
+        error: "Analytics service unavailable",
+        message: "MongoDB not connected"
+      });
+    }
+
+    // Get all bills this user has voted on
+    const userVotes = await mongoDB
+      .collection("votes")
+      .find({ userId })
+      .toArray();
+
+    if (userVotes.length === 0) {
+      return res.status(200).json({
+        success: true,
+        userId,
+        totalVotes: 0,
+        cohortComparisons: {},
+        message: "User has no votes yet"
+      });
+    }
+
+    const userVotedBillIds = userVotes.map(v => v.billId);
+    const userVoteMap = {};
+    userVotes.forEach(v => {
+      userVoteMap[v.billId] = v.vote;
+    });
+
+    // Compare against each demographic dimension
+    const dimensions = ["politicalParty", "educationExpertise", "employmentExpertise", "ageRange"];
+    const cohortComparisons = {};
+
+    for (const dimension of dimensions) {
+      // Get all votes on bills the user voted on, grouped by dimension
+      const pipeline = [
+        { $match: { billId: { $in: userVotedBillIds }, userId: { $ne: userId } } },
+        {
+          $group: {
+            _id: { dimension: `$${dimension}`, billId: "$billId" },
+            supportCount: { $sum: { $cond: [{ $eq: ["$vote", "support"] }, 1, 0] } },
+            opposeCount: { $sum: { $cond: [{ $eq: ["$vote", "oppose"] }, 1, 0] } },
+            total: { $sum: 1 }
+          }
+        }
+      ];
+
+      const cohortVotes = await mongoDB
+        .collection("votes")
+        .aggregate(pipeline)
+        .toArray();
+
+      // Calculate agreement percentage with each cohort
+      const cohortAgreement = {};
+      cohortVotes.forEach(cv => {
+        const cohortName = cv._id.dimension || "Not Specified";
+        const billId = cv._id.billId;
+        const userVote = userVoteMap[billId];
+
+        if (!cohortAgreement[cohortName]) {
+          cohortAgreement[cohortName] = { agreements: 0, total: 0 };
+        }
+
+        // Determine majority vote for this cohort on this bill
+        const cohortMajority = cv.supportCount > cv.opposeCount ? "support" : "oppose";
+        if (userVote === cohortMajority) {
+          cohortAgreement[cohortName].agreements++;
+        }
+        cohortAgreement[cohortName].total++;
+      });
+
+      // Convert to percentages
+      cohortComparisons[dimension] = Object.entries(cohortAgreement).map(([cohort, data]) => ({
+        cohort,
+        agreementPercentage: data.total > 0 ? Math.round((data.agreements / data.total) * 100) : 0,
+        sharedBills: data.total
+      })).sort((a, b) => b.agreementPercentage - a.agreementPercentage);
+    }
+
+    res.status(200).json({
+      success: true,
+      userId,
+      totalVotes: userVotes.length,
+      cohortComparisons
+    });
+
+  } catch (error) {
+    console.error("❌ User cohort comparison error:", error);
+    res.status(500).json({
+      error: "Failed to fetch cohort comparison",
+      message: error.message
+    });
+  }
+});
+
+/**
+ * Compare two users' voting patterns (thumbprint comparison)
+ *
+ * GET /api/compare/user/:userId1/user/:userId2
+ *
+ * Returns affinity scores per committee for bills both users voted on.
+ */
+app.get("/api/compare/user/:userId1/user/:userId2", async (req, res) => {
+  try {
+    const { userId1, userId2 } = req.params;
+
+    if (!mongoDB) {
+      return res.status(503).json({
+        error: "Analytics service unavailable",
+        message: "MongoDB not connected"
+      });
+    }
+
+    // Get votes for both users
+    const [user1Votes, user2Votes] = await Promise.all([
+      mongoDB.collection("votes").find({ userId: userId1 }).toArray(),
+      mongoDB.collection("votes").find({ userId: userId2 }).toArray()
+    ]);
+
+    // Create vote maps
+    const user1VoteMap = {};
+    user1Votes.forEach(v => {
+      user1VoteMap[v.billId] = { vote: v.vote, committees: v.billCommittees || [] };
+    });
+
+    const user2VoteMap = {};
+    user2Votes.forEach(v => {
+      user2VoteMap[v.billId] = { vote: v.vote, committees: v.billCommittees || [] };
+    });
+
+    // Find shared bills
+    const sharedBillIds = Object.keys(user1VoteMap).filter(id => user2VoteMap[id]);
+
+    if (sharedBillIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        userId1,
+        userId2,
+        overallAffinity: null,
+        sharedBillCount: 0,
+        committees: [],
+        message: "No shared bills between users"
+      });
+    }
+
+    // Calculate affinity per committee
+    const committeeAffinity = {};
+    let totalAgreements = 0;
+
+    sharedBillIds.forEach(billId => {
+      const v1 = user1VoteMap[billId];
+      const v2 = user2VoteMap[billId];
+      const agreed = v1.vote === v2.vote;
+
+      if (agreed) totalAgreements++;
+
+      // Track by committee
+      const committees = v1.committees.length > 0 ? v1.committees : ["Uncategorized"];
+      committees.forEach(committee => {
+        if (!committeeAffinity[committee]) {
+          committeeAffinity[committee] = { agreements: 0, disagreements: 0, total: 0 };
+        }
+        committeeAffinity[committee].total++;
+        if (agreed) {
+          committeeAffinity[committee].agreements++;
+        } else {
+          committeeAffinity[committee].disagreements++;
+        }
+      });
+    });
+
+    // Convert to affinity scores (-1 to +1)
+    const committees = Object.entries(committeeAffinity).map(([committee, data]) => {
+      // Affinity: (agreements - disagreements) / total
+      const affinity = (data.agreements - data.disagreements) / data.total;
+      return {
+        committee,
+        affinity: Math.round(affinity * 100) / 100,
+        billCount: data.total,
+        agreements: data.agreements,
+        disagreements: data.disagreements
+      };
+    }).sort((a, b) => b.billCount - a.billCount);
+
+    const overallAffinity = (totalAgreements * 2 - sharedBillIds.length) / sharedBillIds.length;
+
+    res.status(200).json({
+      success: true,
+      userId1,
+      userId2,
+      overallAffinity: Math.round(overallAffinity * 100) / 100,
+      sharedBillCount: sharedBillIds.length,
+      committees
+    });
+
+  } catch (error) {
+    console.error("❌ User comparison error:", error);
+    res.status(500).json({
+      error: "Failed to compare users",
+      message: error.message
+    });
+  }
+});
+
+/**
+ * Compare user's votes with politician's roll call votes
+ *
+ * GET /api/compare/user/:userId/politician/:bioguideId
+ *
+ * Returns affinity scores per committee.
+ */
+app.get("/api/compare/user/:userId/politician/:bioguideId", async (req, res) => {
+  try {
+    const { userId, bioguideId } = req.params;
+
+    if (!mongoDB) {
+      return res.status(503).json({
+        error: "Analytics service unavailable",
+        message: "MongoDB not connected"
+      });
+    }
+
+    // Get user's votes
+    const userVotes = await mongoDB
+      .collection("votes")
+      .find({ userId })
+      .toArray();
+
+    // Get politician's roll call votes
+    const politician = await mongoDB
+      .collection("politician_votes")
+      .findOne({ bioguideId });
+
+    if (!politician) {
+      return res.status(404).json({
+        error: "Politician not found",
+        message: `No roll call data for bioguideId: ${bioguideId}`
+      });
+    }
+
+    // Create vote maps
+    const userVoteMap = {};
+    userVotes.forEach(v => {
+      userVoteMap[v.billId] = { vote: v.vote, committees: v.billCommittees || [] };
+    });
+
+    const politicianVoteMap = {};
+    (politician.votes || []).forEach(v => {
+      // Normalize politician vote (Yea/Nay to support/oppose)
+      const normalizedVote = v.vote === "Yea" || v.vote === "Aye" ? "support" : "oppose";
+      politicianVoteMap[v.billId] = { vote: normalizedVote, committees: v.committees || [] };
+    });
+
+    // Find shared bills
+    const sharedBillIds = Object.keys(userVoteMap).filter(id => politicianVoteMap[id]);
+
+    if (sharedBillIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        userId,
+        bioguideId,
+        politicianName: politician.name,
+        overallAffinity: null,
+        sharedBillCount: 0,
+        committees: [],
+        message: "No shared bills between user and politician"
+      });
+    }
+
+    // Calculate affinity per committee
+    const committeeAffinity = {};
+    let totalAgreements = 0;
+
+    sharedBillIds.forEach(billId => {
+      const uv = userVoteMap[billId];
+      const pv = politicianVoteMap[billId];
+      const agreed = uv.vote === pv.vote;
+
+      if (agreed) totalAgreements++;
+
+      const committees = uv.committees.length > 0 ? uv.committees : ["Uncategorized"];
+      committees.forEach(committee => {
+        if (!committeeAffinity[committee]) {
+          committeeAffinity[committee] = { agreements: 0, disagreements: 0, total: 0 };
+        }
+        committeeAffinity[committee].total++;
+        if (agreed) {
+          committeeAffinity[committee].agreements++;
+        } else {
+          committeeAffinity[committee].disagreements++;
+        }
+      });
+    });
+
+    const committees = Object.entries(committeeAffinity).map(([committee, data]) => {
+      const affinity = (data.agreements - data.disagreements) / data.total;
+      return {
+        committee,
+        affinity: Math.round(affinity * 100) / 100,
+        billCount: data.total,
+        agreements: data.agreements,
+        disagreements: data.disagreements
+      };
+    }).sort((a, b) => b.billCount - a.billCount);
+
+    const overallAffinity = (totalAgreements * 2 - sharedBillIds.length) / sharedBillIds.length;
+
+    res.status(200).json({
+      success: true,
+      userId,
+      bioguideId,
+      politicianName: politician.name,
+      politicianParty: politician.party,
+      politicianState: politician.state,
+      overallAffinity: Math.round(overallAffinity * 100) / 100,
+      sharedBillCount: sharedBillIds.length,
+      committees
+    });
+
+  } catch (error) {
+    console.error("❌ User-politician comparison error:", error);
+    res.status(500).json({
+      error: "Failed to compare with politician",
+      message: error.message
+    });
+  }
+});
+
+/**
+ * Get politician's profile and voting record
+ *
+ * GET /api/politicians/:bioguideId
+ */
+app.get("/api/politicians/:bioguideId", async (req, res) => {
+  try {
+    const { bioguideId } = req.params;
+
+    if (!mongoDB) {
+      return res.status(503).json({
+        error: "Analytics service unavailable",
+        message: "MongoDB not connected"
+      });
+    }
+
+    const politician = await mongoDB
+      .collection("politician_votes")
+      .findOne({ bioguideId });
+
+    if (!politician) {
+      return res.status(404).json({
+        error: "Politician not found",
+        bioguideId
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      politician: {
+        bioguideId: politician.bioguideId,
+        name: politician.name,
+        party: politician.party,
+        state: politician.state,
+        district: politician.district,
+        chamber: politician.chamber,
+        voteCount: (politician.votes || []).length,
+        lastUpdated: politician.updatedAt
+      }
+    });
+
+  } catch (error) {
+    console.error("❌ Get politician error:", error);
+    res.status(500).json({
+      error: "Failed to fetch politician",
+      message: error.message
+    });
+  }
+});
+
+/**
+ * Sync roll call votes from Congress.gov for all members
+ *
+ * POST /api/politicians/sync
+ *
+ * This fetches and stores roll call votes for members of Congress.
+ * Should be run periodically (e.g., daily cron job).
+ */
+app.post("/api/politicians/sync", async (req, res) => {
+  try {
+    if (!mongoDB) {
+      return res.status(503).json({
+        error: "Analytics service unavailable",
+        message: "MongoDB not connected"
+      });
+    }
+
+    const congressApiKey = process.env.CONGRESS_API_KEY;
+    if (!congressApiKey) {
+      return res.status(500).json({
+        error: "Congress API key not configured"
+      });
+    }
+
+    // Get list of current members
+    const membersUrl = `https://api.congress.gov/v3/member?limit=250&api_key=${congressApiKey}`;
+    const membersResponse = await fetch(membersUrl);
+    const membersData = await membersResponse.json();
+
+    if (!membersData.members) {
+      return res.status(500).json({
+        error: "Failed to fetch members from Congress.gov"
+      });
+    }
+
+    let synced = 0;
+    let errors = 0;
+
+    // For each member, fetch their votes (limited for now to avoid rate limits)
+    const members = membersData.members.slice(0, 50); // Process 50 at a time
+
+    for (const member of members) {
+      try {
+        const bioguideId = member.bioguideId;
+
+        // Fetch member's votes
+        const votesUrl = `https://api.congress.gov/v3/member/${bioguideId}/votes?limit=100&api_key=${congressApiKey}`;
+        const votesResponse = await fetch(votesUrl);
+        const votesData = await votesResponse.json();
+
+        // Transform votes
+        const votes = (votesData.votes || []).map(v => ({
+          billId: v.roll_call?.bill?.number ? `${v.roll_call.bill.type}${v.roll_call.bill.number}-${v.roll_call.congress}` : v.rollCallNumber,
+          vote: v.memberVotes?.[0]?.vote || "Not Voting",
+          date: v.date,
+          rollCallNumber: v.rollCallNumber,
+          congress: v.congress,
+          chamber: v.chamber,
+          committees: v.roll_call?.bill?.committees?.map(c => c.name) || []
+        }));
+
+        // Upsert to MongoDB
+        await mongoDB.collection("politician_votes").updateOne(
+          { bioguideId },
+          {
+            $set: {
+              bioguideId,
+              name: member.name,
+              party: member.partyName,
+              state: member.state,
+              district: member.district,
+              chamber: member.terms?.[0]?.chamber,
+              votes,
+              updatedAt: new Date()
+            }
+          },
+          { upsert: true }
+        );
+
+        synced++;
+      } catch (memberError) {
+        console.error(`Error syncing ${member.bioguideId}:`, memberError);
+        errors++;
+      }
+    }
+
+    // Create indexes if they don't exist
+    await mongoDB.collection("politician_votes").createIndex({ bioguideId: 1 }, { unique: true });
+    await mongoDB.collection("politician_votes").createIndex({ state: 1 });
+    await mongoDB.collection("politician_votes").createIndex({ party: 1 });
+
+    res.status(200).json({
+      success: true,
+      message: `Synced ${synced} politicians, ${errors} errors`,
+      synced,
+      errors,
+      totalProcessed: members.length
+    });
+
+  } catch (error) {
+    console.error("❌ Politician sync error:", error);
+    res.status(500).json({
+      error: "Failed to sync politicians",
+      message: error.message
+    });
+  }
+});
+
 /**
  * Health check endpoint
  */
@@ -2036,7 +2979,8 @@ app.get("/health", (req, res) => {
   res.status(200).json({
     status: "healthy",
     timestamp: new Date().toISOString(),
-    service: "populist-api-gateway"
+    service: "populist-api-gateway",
+    mongodb: mongoDB ? "connected" : "disconnected"
   });
 });
 
@@ -2053,7 +2997,7 @@ app.get("*", (req, res) => {
   ) {
     return res.status(404).json({ error: "Not Found" });
   }
-  res.sendFile(path.join(__dirname, "dist", "index.html"));
+  res.sendFile(path.join(__dirname, "webapp", "dist", "index.html"));
 });
 
 // For Cloud Functions deployment
